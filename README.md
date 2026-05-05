@@ -181,44 +181,22 @@ The project is structured as a monorepo, with different agents and shared librar
 
 ## Quick Start
 
-#### Option 1 — Run directly (Python, for development)
-
 ```bash
-# 1. Clone and navigate to the repository
 git clone https://github.com/sonjuhy/Cassiopeia.git
 cd Cassiopeia
 
-# 2. Copy and configure environment variables (required before first run)
-cp .env.example .env
-# Open .env and fill in ADMIN_API_KEY, CLIENT_API_KEY, and other required values
+# Linux / Mac
+./start.sh
 
-# 3. Start Redis (required)
-docker-compose up -d redis
-# Or if Redis is installed locally: redis-server
-
-# 4. Install dependencies
-pip install -r agents/cassiopeia_agent/requirements.txt
-
-# 5. Run Cassiopeia agent in development mode (local LLM)
-# shared_core is resolved from the project root — run from there
-python -m agents.cassiopeia_agent.main --llm local
+# Windows
+start.bat
 ```
 
----
-
-#### Option 2 — Run via Docker (recommended for production)
-
-```bash
-# 1. Clone and navigate to the repository
-git clone https://github.com/sonjuhy/Cassiopeia.git
-cd Cassiopeia
-
-# 2. Copy and configure environment variables
-cp .env.example .env
-
-# 3. Start Redis + Cassiopeia agent
-docker-compose up -d redis cassiopeia_agent
-```
+The script will:
+1. Create and activate a virtual environment
+2. Install dependencies
+3. Run the setup wizard to generate `.env` (first time only)
+4. Ask whether to run via **Python** (development) or **Docker** (production)
 
 The agent is available at `http://localhost:49152`.
 
@@ -229,11 +207,7 @@ The agent is available at `http://localhost:49152`.
     git clone https://github.com/sonjuhy/Cassiopeia.git
     cd Cassiopeia
     ```
-2.  **Set up environment variables:** Copy `.env.example` to `.env` and configure as needed.
-3.  **Install dependencies:** Each agent has its own `requirements.txt`.
-    ```bash
-    pip install -r agents/cassiopeia_agent/requirements.txt
-    ```
+2.  **Run the start script:** `./start.sh` (Linux/Mac) or `start.bat` (Windows)
 
 ## Running the Agents
 
@@ -375,44 +349,22 @@ This project is licensed under the Apache 2.0 License.
 
 ## 간편 가이드 (Quick Start)
 
-#### 방법 1 — 직접 실행 (Python, 개발 환경)
-
 ```bash
-# 1. 저장소 클론 및 이동
 git clone https://github.com/sonjuhy/Cassiopeia.git
 cd Cassiopeia
 
-# 2. 환경 변수 파일 복사 및 설정 (최초 실행 전 필수)
-cp .env.example .env
-# .env 파일을 열어 ADMIN_API_KEY, CLIENT_API_KEY 등 필수 값을 입력하세요
+# Linux / Mac
+./start.sh
 
-# 3. Redis 실행 (필수)
-docker-compose up -d redis
-# 또는 로컬에 Redis가 설치된 경우: redis-server
-
-# 4. 필수 패키지 설치
-pip install -r agents/cassiopeia_agent/requirements.txt
-
-# 5. 개발 모드(로컬 LLM)로 카시오페아 에이전트 바로 실행
-# shared_core는 프로젝트 루트 기준으로 탐색되므로 루트에서 실행하세요
-python -m agents.cassiopeia_agent.main --llm local
+# Windows
+start.bat
 ```
 
----
-
-#### 방법 2 — Docker로 실행 (운영 환경 권장)
-
-```bash
-# 1. 저장소 클론 및 이동
-git clone https://github.com/sonjuhy/Cassiopeia.git
-cd Cassiopeia
-
-# 2. 환경 변수 파일 복사 및 설정
-cp .env.example .env
-
-# 3. Redis + 카시오페아 에이전트 시작
-docker-compose up -d redis cassiopeia_agent
-```
+스크립트가 다음을 자동으로 처리합니다:
+1. 가상환경 생성 및 활성화
+2. 의존성 설치
+3. 설정 마법사로 `.env` 생성 (최초 1회)
+4. **Python** (개발) 또는 **Docker** (운영) 실행 방식 선택
 
 에이전트는 `http://localhost:49152`에서 접근할 수 있습니다.
 
@@ -423,11 +375,7 @@ docker-compose up -d redis cassiopeia_agent
     git clone https://github.com/sonjuhy/Cassiopeia.git
     cd Cassiopeia
     ```
-2.  **환경 변수 설정:** `.env.example` 파일을 `.env`로 복사하고 필요에 맞게 구성합니다.
-3.  **의존성 설치:** 각 에이전트는 자체 `requirements.txt`를 가집니다.
-    ```bash
-    pip install -r agents/cassiopeia_agent/requirements.txt
-    ```
+2.  **시작 스크립트 실행:** `./start.sh` (Linux/Mac) 또는 `start.bat` (Windows)
 
 ## 에이전트 실행
 
