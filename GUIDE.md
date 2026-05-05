@@ -2,6 +2,45 @@
 
 This project implements a multi-agent system where agents collaborate to perform complex tasks.
 
+## Quick Start
+
+#### Option 1 — Run directly (Python, for development)
+
+```bash
+# 1. Clone and navigate to the repository
+git clone https://github.com/sonjuhy/Cassiopeia.git
+cd Cassiopeia
+
+# 2. Copy and configure environment variables (required before first run)
+cp .env.example .env
+# Open .env and fill in ADMIN_API_KEY, CLIENT_API_KEY, and other required values
+
+# 3. Install dependencies
+pip install -r agents/cassiopeia_agent/requirements.txt
+
+# 4. Run Cassiopeia agent in development mode (local LLM)
+# shared_core is resolved from the project root — run from there
+python -m agents.cassiopeia_agent.main --llm local
+```
+
+---
+
+#### Option 2 — Run via Docker (recommended for production)
+
+```bash
+# 1. Clone and navigate to the repository
+git clone https://github.com/sonjuhy/Cassiopeia.git
+cd Cassiopeia
+
+# 2. Copy and configure environment variables
+cp .env.example .env
+
+# 3. Start Redis + Cassiopeia agent
+docker-compose up -d redis cassiopeia_agent
+```
+
+The agent is available at `http://localhost:49152`.
+
 ## Agents
 
 The project consists of several agents, each with a specific role:
@@ -23,21 +62,46 @@ The project consists of several agents, each with a specific role:
 
 The cassiopeia agent can be run as a FastAPI application.
 
+#### Option 1 — Run directly (Python)
+
+> **Note:** Always run commands from the **project root** (`Cassiopeia/`).
+> `shared_core` is a root-level package and must be on the Python path.
+
 **Development Mode (local LLM):**
 ```bash
-python agents/cassiopeia_agent/main.py --llm local
+python -m agents.cassiopeia_agent.main --llm local
 ```
 
 **Production Mode (external LLMs):**
 ```bash
-LLM_BACKEND=chatgpt python agents/cassiopeia_agent/main.py
-LLM_BACKEND=claude python agents/cassiopeia_agent/main.py
+LLM_BACKEND=claude python -m agents.cassiopeia_agent.main
+LLM_BACKEND=gemini python -m agents.cassiopeia_agent.main
 ```
 
-**Running as a module:**
+---
+
+#### Option 2 — Run via Docker (recommended for production)
+
+Redis and the Cassiopeia agent start together. Set the required environment variables in `.env` before running.
+
 ```bash
-python -m agents.cassiopeia_agent.main
+# Start Redis + Cassiopeia agent
+docker-compose up -d redis cassiopeia_agent
+
+# With local LLM (Ollama on Linux GPU)
+docker-compose --profile local-llm up -d
+
+# View logs
+docker-compose logs -f cassiopeia_agent
 ```
+
+The agent is available at `http://localhost:49152` by default (configurable via `CASSIOPEIA_PORT` in `.env`).
+
+| `LLM_BACKEND` value | Description |
+|---|---|
+| `gemini` (default) | Google Gemini API |
+| `claude` | Anthropic Claude API |
+| `local` | Local Ollama instance |
 
 ### Other Agents
 
@@ -58,12 +122,37 @@ python tools/setup_wizard.py
 ## Development Workflow
 
 1.  **Code Structure:** Agents are located in the `agents/` directory, with core libraries in `shared_core/`.
-2.  **Dependency Management:** Poetry is used for dependency management. Run `poetry install` within the respective agent's directory or at the project root if a poetry.lock exists.
+2.  **Dependency Management:** Each agent has its own `requirements.txt`. Run `pip install -r agents/<agent-name>/requirements.txt` within a virtual environment.
 3.  **Testing:** Tests are located in the `tests/` subdirectory of each agent. Use `pytest` to run tests. For example, to run tests for the cassiopeia agent:
     ```bash
     pytest agents/cassiopeia_agent/tests/
     ```
 4.  **Code Style:** Adhere to standard Python style guides (PEP 8). Linters and formatters are configured in the project.
+
+## Adding a New Agent
+
+To add a new agent to Cassiopeia, use the **CassiopeiaSDK**.
+Agents built with the SDK are **automatically registered** to Cassiopeia simply by running them via Docker.
+
+> SDK Repository: [https://github.com/sonjuhy/CassiopeiaSDK](https://github.com/sonjuhy/CassiopeiaSDK)
+
+**Python (pip):**
+```bash
+pip install cassiopeia-sdk
+```
+
+**Node.js (npm):**
+```bash
+npm install cassiopeia-sdk
+```
+
+**Run and auto-register via Docker:**
+```bash
+docker build -t my-agent .
+docker run --network cassiopeia-net my-agent
+```
+
+For full usage details, refer to the [CassiopeiaSDK repository](https://github.com/sonjuhy/CassiopeiaSDK).
 
 ## Contributing
 
@@ -105,6 +194,45 @@ If you encounter issues, check the agent logs, ensure dependencies are installed
 
 이 프로젝트는 여러 에이전트가 협력하여 복잡한 작업을 수행하는 멀티 에이전트 시스템을 구현합니다.
 
+## 간편 가이드 (Quick Start)
+
+#### 방법 1 — 직접 실행 (Python, 개발 환경)
+
+```bash
+# 1. 저장소 클론 및 이동
+git clone https://github.com/sonjuhy/Cassiopeia.git
+cd Cassiopeia
+
+# 2. 환경 변수 파일 복사 및 설정 (최초 실행 전 필수)
+cp .env.example .env
+# .env 파일을 열어 ADMIN_API_KEY, CLIENT_API_KEY 등 필수 값을 입력하세요
+
+# 3. 필수 패키지 설치
+pip install -r agents/cassiopeia_agent/requirements.txt
+
+# 4. 개발 모드(로컬 LLM)로 카시오페아 에이전트 바로 실행
+# shared_core는 프로젝트 루트 기준으로 탐색되므로 루트에서 실행하세요
+python -m agents.cassiopeia_agent.main --llm local
+```
+
+---
+
+#### 방법 2 — Docker로 실행 (운영 환경 권장)
+
+```bash
+# 1. 저장소 클론 및 이동
+git clone https://github.com/sonjuhy/Cassiopeia.git
+cd Cassiopeia
+
+# 2. 환경 변수 파일 복사 및 설정
+cp .env.example .env
+
+# 3. Redis + 카시오페아 에이전트 시작
+docker-compose up -d redis cassiopeia_agent
+```
+
+에이전트는 `http://localhost:49152`에서 접근할 수 있습니다.
+
 ## 에이전트 목록
 
 프로젝트는 각기 특정 역할을 담당하는 여러 에이전트로 구성됩니다:
@@ -126,21 +254,46 @@ If you encounter issues, check the agent logs, ensure dependencies are installed
 
 카시오페아 에이전트는 FastAPI 애플리케이션으로 실행할 수 있습니다.
 
+#### 방법 1 — 직접 실행 (Python)
+
+> **주의:** 반드시 **프로젝트 루트**(`Cassiopeia/`)에서 실행하세요.
+> `shared_core`는 루트 레벨 패키지로, Python path에 포함되어야 합니다.
+
 **개발 모드 (로컬 LLM):**
 ```bash
-python agents/cassiopeia_agent/main.py --llm local
+python -m agents.cassiopeia_agent.main --llm local
 ```
 
 **운영 모드 (외부 LLMs):**
 ```bash
-LLM_BACKEND=chatgpt python agents/cassiopeia_agent/main.py
-LLM_BACKEND=claude python agents/cassiopeia_agent/main.py
+LLM_BACKEND=claude python -m agents.cassiopeia_agent.main
+LLM_BACKEND=gemini python -m agents.cassiopeia_agent.main
 ```
 
-**모듈로 실행:**
+---
+
+#### 방법 2 — Docker로 실행 (운영 환경 권장)
+
+실행 전 `.env` 파일에 필수 환경 변수를 설정하세요. Redis와 에이전트가 함께 시작됩니다.
+
 ```bash
-python -m agents.cassiopeia_agent.main
+# Redis + 카시오페아 에이전트 함께 시작
+docker-compose up -d redis cassiopeia_agent
+
+# 로컬 LLM 사용 시 (Linux GPU 환경, Ollama 포함)
+docker-compose --profile local-llm up -d
+
+# 로그 확인
+docker-compose logs -f cassiopeia_agent
 ```
+
+기본 포트는 `http://localhost:49152`이며, `.env`의 `CASSIOPEIA_PORT`로 변경할 수 있습니다.
+
+| `LLM_BACKEND` 값 | 설명 |
+|---|---|
+| `gemini` (기본값) | Google Gemini API |
+| `claude` | Anthropic Claude API |
+| `local` | 로컬 Ollama 인스턴스 |
 
 ### 다른 에이전트들
 
@@ -161,12 +314,37 @@ python tools/setup_wizard.py
 ## 개발 워크플로우
 
 1.  **코드 구조:** 에이전트들은 `agents/` 디렉토리에, 공통 라이브러리는 `shared_core/`에 위치합니다.
-2.  **의존성 관리:** 의존성 관리 도구로 Poetry를 사용합니다. 각 에이전트 디렉토리, 또는 루트에 poetry.lock이 있다면 루트에서 `poetry install`을 실행하세요.
+2.  **의존성 관리:** 각 에이전트는 자체 `requirements.txt`를 가집니다. 가상환경에서 `pip install -r agents/<에이전트명>/requirements.txt`를 실행하세요.
 3.  **테스트:** 테스트 코드는 각 에이전트의 `tests/` 하위 디렉토리에 있습니다. `pytest`로 테스트를 실행하세요. 예시 (카시오페아 에이전트 테스트):
     ```bash
     pytest agents/cassiopeia_agent/tests/
     ```
 4.  **코드 스타일:** 파이썬 표준 스타일 가이드(PEP 8)를 준수합니다. 프로젝트 내에 Linter와 Formatter가 구성되어 있습니다.
+
+## 새 에이전트 추가
+
+Cassiopeia에 새 에이전트를 추가하려면 **CassiopeiaSDK**를 사용하세요.
+SDK로 빌드한 에이전트는 Docker로 실행하는 것만으로 Cassiopeia에 **자동 등록**됩니다.
+
+> SDK 레포지토리: [https://github.com/sonjuhy/CassiopeiaSDK](https://github.com/sonjuhy/CassiopeiaSDK)
+
+**Python (pip):**
+```bash
+pip install cassiopeia-sdk
+```
+
+**Node.js (npm):**
+```bash
+npm install cassiopeia-sdk
+```
+
+**Docker로 실행 및 자동 등록:**
+```bash
+docker build -t my-agent .
+docker run --network cassiopeia-net my-agent
+```
+
+자세한 사용법은 [CassiopeiaSDK 레포지토리](https://github.com/sonjuhy/CassiopeiaSDK)를 참조하세요.
 
 ## 기여하기
 

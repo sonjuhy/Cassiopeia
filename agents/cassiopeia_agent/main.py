@@ -69,6 +69,52 @@ from pydantic import BaseModel, Field
 load_dotenv(encoding="utf-8", override=True)
 
 
+def _check_env_or_setup() -> None:
+    """필수 환경변수가 없으면 설정 방법을 선택하게 한다."""
+    required = ["ADMIN_API_KEY", "CLIENT_API_KEY"]
+    missing = [k for k in required if not os.environ.get(k)]
+    if not missing:
+        return
+
+    print("=" * 60)
+    print(" Cassiopeia — 필수 환경변수가 설정되지 않았습니다.")
+    print(f" 누락된 항목: {', '.join(missing)}")
+    print("=" * 60)
+    print("\n설정 방법을 선택하세요:")
+    print("  1) 설정 마법사 실행 (자동으로 .env 생성)")
+    print("  2) 직접 .env 수정 후 재실행")
+    print()
+
+    while True:
+        choice = input("선택 [1/2]: ").strip()
+        if choice == "1":
+            import sys
+            from pathlib import Path
+            wizard_path = Path(__file__).resolve().parents[2] / "tools" / "setup_wizard.py"
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("setup_wizard", wizard_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.SetupWizard().run()
+            load_dotenv(encoding="utf-8", override=True)
+            still_missing = [k for k in required if not os.environ.get(k)]
+            if still_missing:
+                print(f"\n[오류] 아직 누락된 항목이 있습니다: {', '.join(still_missing)}")
+                sys.exit(1)
+            print("\n환경변수가 로드되었습니다. 서버를 시작합니다...\n")
+            return
+        elif choice == "2":
+            print("\n.env 파일을 수정한 뒤 다시 실행하세요.")
+            print("  참고: .env.example 을 .env 로 복사한 뒤 편집하세요.")
+            import sys
+            sys.exit(0)
+        else:
+            print("  1 또는 2를 입력하세요.")
+
+
+_check_env_or_setup()
+
+
 def _validate_callback_url(url: str) -> None:
     """SSRF 방어: callback_url 에 내부망/루프백/링크로컬 주소가 오지 못하도록 차단한다."""
     parsed = urlparse(url)
