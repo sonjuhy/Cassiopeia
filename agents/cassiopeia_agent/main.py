@@ -90,9 +90,16 @@ _MSG = {
         "redis_opt2":       "  2) Start in another terminal, then press Enter here",
         "redis_opt3":       "  3) Exit",
         "redis_select":     "Select [1/2/3]: ",
-        "redis_starting":   "Starting Redis via Docker...",
-        "redis_start_fail": "[Error] Failed to start Redis: {}\nPlease start Redis manually and re-run.\n",
-        "redis_wait":       "Start Redis in another terminal, then press Enter to continue...",
+        "redis_starting":       "Starting Redis via Docker...",
+        "redis_docker_perm":    (
+            "[Error] Docker permission denied.\n"
+            "  Your user does not have access to the Docker socket.\n"
+            "  Fix (permanent): sudo usermod -aG docker $USER  → logout and login again\n"
+            "  Fix (one-time) : sudo docker-compose up -d redis\n"
+            "  → Use option 2 to start Redis manually, then press Enter."
+        ),
+        "redis_start_fail":     "[Error] Failed to start Redis: {}\nPlease start Redis manually and re-run.\n",
+        "redis_wait":           "Start Redis in another terminal, then press Enter to continue...",
         "redis_retry":      "Checking Redis connection...",
         "redis_ok":         "Redis connected. Starting server...\n",
         "redis_fail":       "[Error] Still cannot connect to Redis. ({}:{})\nPlease verify Redis is running and try again.\n",
@@ -119,9 +126,16 @@ _MSG = {
         "redis_opt2":       "  2) 다른 터미널에서 직접 시작 후 여기서 Enter",
         "redis_opt3":       "  3) 종료",
         "redis_select":     "선택 [1/2/3]: ",
-        "redis_starting":   "Docker로 Redis를 시작합니다...",
-        "redis_start_fail": "[오류] Redis 시작에 실패했습니다: {}\n직접 Redis를 실행한 뒤 다시 시도하세요.\n",
-        "redis_wait":       "다른 터미널에서 Redis를 실행한 뒤 Enter를 누르세요...",
+        "redis_starting":       "Docker로 Redis를 시작합니다...",
+        "redis_docker_perm":    (
+            "[오류] Docker 소켓 권한이 없습니다.\n"
+            "  현재 유저가 docker 그룹에 속하지 않아 Docker를 실행할 수 없습니다.\n"
+            "  영구 해결: sudo usermod -aG docker $USER  → 로그아웃 후 다시 로그인\n"
+            "  임시 해결: sudo docker-compose up -d redis\n"
+            "  → 2번을 선택해 다른 터미널에서 직접 실행한 뒤 Enter를 눌러주세요."
+        ),
+        "redis_start_fail":     "[오류] Redis 시작에 실패했습니다: {}\n직접 Redis를 실행한 뒤 다시 시도하세요.\n",
+        "redis_wait":           "다른 터미널에서 Redis를 실행한 뒤 Enter를 누르세요...",
         "redis_retry":      "Redis 연결을 다시 확인합니다...",
         "redis_ok":         "Redis 연결 확인됐습니다. 서버를 시작합니다...\n",
         "redis_fail":       "[오류] 아직 Redis에 연결할 수 없습니다. ({}:{})\nRedis가 실행 중인지 확인한 뒤 다시 시도하세요.\n",
@@ -230,12 +244,21 @@ def _check_redis_or_guide() -> None:
         if choice == "1":
             print(msg["redis_starting"])
             try:
-                subprocess.run(
+                result = subprocess.run(
                     ["docker-compose", "up", "-d", "redis"],
                     check=True,
+                    capture_output=True,
+                    text=True,
                 )
-            except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                print(msg["redis_start_fail"].format(e))
+            except subprocess.CalledProcessError as e:
+                combined = (e.stdout or "") + (e.stderr or "")
+                if "Permission denied" in combined or "PermissionError" in combined:
+                    print(msg["redis_docker_perm"])
+                else:
+                    print(msg["redis_start_fail"].format(e))
+                continue
+            except FileNotFoundError:
+                print(msg["redis_start_fail"].format("docker-compose not found"))
                 continue
 
         elif choice == "2":
