@@ -67,7 +67,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-load_dotenv(encoding="utf-8", override=True)
+load_dotenv(encoding="utf-8")
 
 
 
