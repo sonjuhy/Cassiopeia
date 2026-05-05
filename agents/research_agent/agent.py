@@ -1,19 +1,16 @@
 """
 Research Agent 구체 구현체
 - 웹 검색 및 정보 수집
-- Redis BLPOP으로 오케스트라 디스패치 수신
 - 처리 결과를 HTTP POST /results 로 오케스트라에 전송
+- 태스크 수신은 ResearchCassiopeiaListener (cassiopeia-sdk Pub/Sub)가 담당
 """
 
 import asyncio
 import json
 import logging
-import os
-from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-import redis.asyncio as aioredis
 
 from .config import ResearchAgentConfig, load_config_from_env
 from .providers import build_search_provider
@@ -24,9 +21,6 @@ from shared_core.llm.llm_config import LLMConfig, load_llm_config_for_agent, llm
 from shared_core.storage.sqlite_manager import SqliteStorageManager
 
 logger = logging.getLogger("research_agent.agent")
-
-_HEARTBEAT_INTERVAL = 15
-_BLPOP_TIMEOUT = 5
 
 
 class ResearchAgent:
@@ -212,45 +206,3 @@ class ResearchAgent:
             except Exception as exc:
                 logger.error("[ResearchAgent] 결과 보고 실패 task_id=%s: %s", task_id, exc)
 
-    async def run(self) -> None:
-        redis_url = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379")
-        if "localhost" in redis_url:
-            redis_url = redis_url.replace("localhost", "127.0.0.1")
-        orchestra_url = os.environ.get("ORCHESTRA_URL", "http://orchestra-agent:8001")
-        queue_key = f"agent:{self.agent_name}:tasks"
-        health_key = f"agent:{self.agent_name}:health"
-
-        logger.info("[ResearchAgent] 실행 시작 (Redis: %s, queue: %s)", redis_url, queue_key)
-
-        redis = aioredis.from_url(redis_url, decode_responses=True)
-
-        async def heartbeat_loop():
-            while True:
-                try:
-                    await redis.hset(health_key, mapping={
-                        "status": "IDLE",
-                        "last_heartbeat": datetime.now(timezone.utc).isoformat(),
-                        "version": "1.0.0"
-                    })
-                    await redis.expire(health_key, 60)
-                    await asyncio.sleep(_HEARTBEAT_INTERVAL)
-                except asyncio.CancelledError:
-                    break
-                except Exception:
-                    await asyncio.sleep(5)
-
-        hb_task = asyncio.create_task(heartbeat_loop())
-
-        try:
-            while True:
-                result = await redis.blpop(queue_key, timeout=_BLPOP_TIMEOUT)
-                if result is None:
-                    continue
-                _, raw = result
-                asyncio.create_task(self._handle_task(raw, orchestra_url))
-        except asyncio.CancelledError:
-            logger.info("[ResearchAgent] 종료")
-        finally:
-            hb_task.cancel()
-            await redis.aclose()
-            logger.info("[ResearchAgent] 실행 종료")
