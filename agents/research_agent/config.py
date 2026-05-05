@@ -22,7 +22,7 @@ class ResearchAgentConfig:
 
     search_provider: SearchProviderName = "gemini"
     search_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-2.5-flash"
     perplexity_model: str = "sonar"
     report_output_dir: Path = field(default_factory=lambda: Path("./reports"))
     fallback_provider: SearchProviderName | None = None
@@ -37,7 +37,7 @@ def load_config_from_env() -> ResearchAgentConfig:
         RESEARCH_SEARCH_PROVIDER : 검색 공급자 ("gemini" | "perplexity"). 기본값 "gemini".
         GEMINI_API_KEY            : Gemini API 키 (provider=gemini 일 때 사용).
         PERPLEXITY_API_KEY        : Perplexity API 키 (provider=perplexity 일 때 사용).
-        GEMINI_SEARCH_MODEL       : Gemini 모델 이름. 기본값 "gemini-2.0-flash".
+        GEMINI_SEARCH_MODEL       : Gemini 모델 이름. 기본값 "gemini-2.5-flash".
         PERPLEXITY_SEARCH_MODEL   : Perplexity 모델 이름. 기본값 "sonar".
         RESEARCH_REPORT_OUTPUT_DIR: 보고서 저장 디렉터리. 기본값 "./reports".
         RESEARCH_FALLBACK_PROVIDER: 보조 검색 공급자 ("gemini" | "perplexity"). 기본값 None.
@@ -64,7 +64,7 @@ def load_config_from_env() -> ResearchAgentConfig:
     return ResearchAgentConfig(
         search_provider=provider,
         search_api_key=api_key,
-        gemini_model=os.environ.get("GEMINI_SEARCH_MODEL", "gemini-2.0-flash"),
+        gemini_model=os.environ.get("GEMINI_SEARCH_MODEL", "gemini-2.5-flash"),
         perplexity_model=os.environ.get("PERPLEXITY_SEARCH_MODEL", "sonar"),
         report_output_dir=Path(
             os.environ.get("RESEARCH_REPORT_OUTPUT_DIR", "./reports")

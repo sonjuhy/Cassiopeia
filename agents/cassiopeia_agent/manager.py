@@ -80,7 +80,7 @@ _DLQ_KEY = "cassiopeia:dlq"
 _MSG_VERSION = "1.1"
 _APPROVAL_TIMEOUT_SEC: int = int(os.environ.get("APPROVAL_TIMEOUT_SEC", "300"))
 _BLPOP_TIMEOUT: int = int(os.environ.get("BLPOP_TIMEOUT", "5"))
-_LLM_MODEL: str = os.environ.get("NLU_LLM_MODEL", "gemini-2.0-flash")
+_LLM_MODEL: str = os.environ.get("NLU_LLM_MODEL", "gemini-2.5-flash")
 _LLM_TEMPERATURE: float = float(os.environ.get("NLU_LLM_TEMPERATURE", "0.2"))
 
 # 플랫폼별 통신 큐 (source → queue key)

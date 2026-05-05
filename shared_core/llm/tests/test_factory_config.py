@@ -62,13 +62,13 @@ class TestBuildLLMProviderFromConfig:
             build_llm_provider_from_config(cfg)
 
     def test_model_passed_through_to_factory(self):
-        cfg = LLMConfig(backend="gemini", model="gemini-2.0-flash")
+        cfg = LLMConfig(backend="gemini", model="gemini-2.5-flash")
 
         with patch("shared_core.llm.factory.build_llm_provider") as mock_build:
             mock_build.return_value = MagicMock()
             build_llm_provider_from_config(cfg)
             _, kwargs = mock_build.call_args
-            assert kwargs["model"] == "gemini-2.0-flash"
+            assert kwargs["model"] == "gemini-2.5-flash"
 
     def test_api_key_passed_through_to_factory(self):
         cfg = LLMConfig(backend="claude", api_key="custom-key")

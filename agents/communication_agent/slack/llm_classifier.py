@@ -102,7 +102,7 @@ class ClaudeAPIClassifier(LLMClassifier):
 class GeminiAPIClassifier(LLMClassifier):
     """레거시 별칭. LLMClassifier(GeminiProvider)를 사용하세요."""
 
-    def __init__(self, model: str = "gemini-2.0-flash") -> None:
+    def __init__(self, model: str = "gemini-2.5-flash") -> None:
         from shared_core.llm import GeminiProvider
         super().__init__(provider=GeminiProvider(model=model))
 

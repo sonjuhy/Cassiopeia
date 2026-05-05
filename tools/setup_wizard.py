@@ -54,7 +54,7 @@ class SetupWizard:
             key = input("GEMINI_API_KEY 입력: ").strip()
             if key:
                 self.config["GEMINI_API_KEY"] = key
-                self.config["NLU_LLM_MODEL"] = "gemini-2.0-flash"
+                self.config["NLU_LLM_MODEL"] = "gemini-2.5-flash"
         elif backend == "claude":
             key = input("ANTHROPIC_API_KEY 입력: ").strip()
             if key:

@@ -22,7 +22,7 @@ class GeminiSearchProvider:
     필요 패키지: google-generativeai >= 0.8
     """
 
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash") -> None:
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
         try:
             import google.generativeai as genai  # type: ignore[import]
         except ImportError as e:
@@ -167,7 +167,7 @@ class FallbackSearchProvider(SearchProviderProtocol):
 def build_search_provider(
     provider_name: SearchProviderName,
     api_key: str,
-    gemini_model: str = "gemini-2.0-flash",
+    gemini_model: str = "gemini-2.5-flash",
     perplexity_model: str = "sonar",
 ) -> SearchProviderProtocol:
     """

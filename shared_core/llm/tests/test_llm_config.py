@@ -141,11 +141,11 @@ class TestLLMConfigFromDispatch:
 
     def test_dispatch_config_with_model(self):
         dispatch = {
-            "llm_config": {"backend": "gemini", "model": "gemini-2.0-flash"},
+            "llm_config": {"backend": "gemini", "model": "gemini-2.5-flash"},
         }
         cfg = llm_config_from_dispatch(dispatch)
         assert cfg is not None
-        assert cfg.model == "gemini-2.0-flash"
+        assert cfg.model == "gemini-2.5-flash"
 
     def test_dispatch_config_with_api_key(self):
         dispatch = {
@@ -166,5 +166,5 @@ class TestLLMConfigFromDispatch:
         assert llm_config_from_dispatch(dispatch) is None
 
     def test_returns_none_when_llm_config_missing_backend(self):
-        dispatch = {"llm_config": {"model": "gemini-2.0-flash"}}
+        dispatch = {"llm_config": {"model": "gemini-2.5-flash"}}
         assert llm_config_from_dispatch(dispatch) is None

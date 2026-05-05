@@ -28,7 +28,7 @@ def mock_config():
     config = MagicMock()
     config.search_provider = "gemini"
     config.search_api_key = "test"
-    config.gemini_model = "gemini-2.0-flash"
+    config.gemini_model = "gemini-2.5-flash"
     config.perplexity_model = "sonar"
     config.fallback_provider = None
     config.fallback_api_key = ""
