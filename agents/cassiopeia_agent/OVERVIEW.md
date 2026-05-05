@@ -1,4 +1,4 @@
-# OVERVIEW OF THE ORCHESTRA AGENT
+# OVERVIEW OF THE CASSIOPEIA AGENT
 
 This document outlines the core functionality, architecture, and usage of the cassiopeia agent.
 
