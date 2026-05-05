@@ -109,9 +109,10 @@ class SetupWizard:
 
     def save_env(self):
         # 기본 설정값
+        redis_pass = self.config.get("REDIS_CASSIOPEIA_PASSWORD", "")
         defaults = {
             "PYTHONPATH": ".",
-            "REDIS_URL": "redis://127.0.0.1:6379",
+            "REDIS_URL": f"redis://cassiopeia:{redis_pass}@127.0.0.1:6379",
             "NLU_CONFIDENCE_THRESHOLD": "0.7",
             "NLU_LLM_TEMPERATURE": "0.2",
             "USER_TIMEZONE": "Asia/Seoul",
