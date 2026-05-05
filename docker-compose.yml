@@ -6,7 +6,8 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    # 에이전트 간 내부 통신용으로만 사용 (호스트 노출 차단)
+    ports:
+      - "127.0.0.1:6379:6379"
     environment:
       - REDIS_CASSIOPEIA_PASSWORD=${REDIS_CASSIOPEIA_PASSWORD}
       - REDIS_COMMUNITY_PASSWORD=${REDIS_COMMUNITY_PASSWORD}
