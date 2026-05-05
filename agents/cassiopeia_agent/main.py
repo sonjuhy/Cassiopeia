@@ -50,6 +50,7 @@ import json
 import logging
 import os
 import re
+import sys
 import socket
 import uuid
 from contextlib import asynccontextmanager
@@ -160,7 +161,6 @@ def _select_language() -> dict:
 
 def _check_env_or_setup() -> None:
     """필수 환경변수가 없으면 언어 선택 후 설정 방법을 안내한다."""
-    import sys
     required = ["ADMIN_API_KEY", "CLIENT_API_KEY"]
     missing = [k for k in required if not os.environ.get(k)]
     if not missing:
@@ -356,6 +356,20 @@ _KNOWN_AGENTS = [
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI 수명 주기 관리: 초기화 → 백그라운드 실행 → 종료."""
+    try:
+        await _startup(app)
+    except _StartupError as exc:
+        logger.critical("[시작 실패] %s", exc)
+        sys.exit(1)
+    yield
+    await _shutdown()
+
+
+class _StartupError(Exception):
+    pass
+
+
+async def _startup(app: FastAPI):  # noqa: C901
     logger.info("[Lifespan] Cassiopeia Agent 시작")
 
     redis_url = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379").replace(
@@ -371,7 +385,7 @@ async def lifespan(app: FastAPI):
         logger.info("[Lifespan] Redis 연결 성공")
     except Exception as exc:
         logger.error("[Lifespan] Redis 연결 실패: %s", exc)
-        raise RuntimeError(f"Redis 연결 실패: {exc}")
+        raise _StartupError(f"Redis 연결 실패: {exc}")
 
     ctx.state_manager = StateManager(redis_client=ctx.redis_client)
     ctx.health_monitor = HealthMonitor(redis_client=ctx.redis_client)
@@ -398,24 +412,24 @@ async def lifespan(app: FastAPI):
             _OLLAMA_READY_TIMEOUT, _LOCAL_LLM_MODEL,
         )
         if not await ollama_mgr.wait_until_ready(timeout=_OLLAMA_READY_TIMEOUT):
-            raise RuntimeError(
+            raise _StartupError(
                 f"Ollama 서버 응답 없음 (timeout={_OLLAMA_READY_TIMEOUT}s) — "
                 "OLLAMA_BASE_URL 또는 OLLAMA_READY_TIMEOUT을 확인하세요."
             )
         try:
             await ollama_mgr.ensure_model(_LOCAL_LLM_MODEL)
         except RuntimeError as exc:
-            raise RuntimeError(f"Ollama 모델 준비 실패 ({_LOCAL_LLM_MODEL}): {exc}") from exc
+            raise _StartupError(f"Ollama 모델 준비 실패 ({_LOCAL_LLM_MODEL}): {exc}") from exc
         logger.info("[Lifespan] Ollama 준비 완료: %s", _LOCAL_LLM_MODEL)
 
     try:
         nlu_engine = build_nlu_engine()
         logger.info("[Lifespan] NLU 엔진 생성 완료 (%s)", nlu_engine.__class__.__name__)
         if not await nlu_engine.validate():
-            raise RuntimeError("LLM API 연결 검증 실패")
+            raise _StartupError("LLM API 연결 검증 실패")
     except Exception as exc:
         logger.error("[Lifespan] NLU 초기화 실패: %s", exc)
-        raise RuntimeError(f"NLU 초기화 실패: {exc}")
+        raise _StartupError(f"NLU 초기화 실패: {exc}")
 
     ctx.manager = CassiopeiaManager(
         redis_client=ctx.redis_client,
@@ -473,8 +487,8 @@ async def lifespan(app: FastAPI):
         ctx.health_monitor.monitor_loop(interval=30), name="cassiopeia_health_monitor"
     )
 
-    yield
 
+async def _shutdown():
     for t in [ctx.listen_task, ctx.monitor_task]:
         if t and not t.done():
             t.cancel()
@@ -483,13 +497,19 @@ async def lifespan(app: FastAPI):
             except asyncio.CancelledError:
                 pass
 
-    await ctx.cassiopeia_client.disconnect()
+    if ctx.cassiopeia_client:
+        await ctx.cassiopeia_client.disconnect()
 
     if ctx.sandbox_tool is not None:
         await ctx.sandbox_tool.shutdown()
 
-    await ctx.state_manager.close()
-    await ctx.redis_client.aclose()
+    if ctx.state_manager:
+        await ctx.state_manager.close()
+
+    if ctx.redis_client:
+        await ctx.redis_client.aclose()
+
+    logger.info("[Lifespan] Cassiopeia Agent 종료")
 
 
 # ── FastAPI 앱 ────────────────────────────────────────────────────────────────
