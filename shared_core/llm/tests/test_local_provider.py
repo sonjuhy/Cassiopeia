@@ -146,11 +146,13 @@ class TestValidate:
         httpx_mock.add_exception(
             httpx.ConnectError("refused"), url=_MODELS_URL,
         )
-        assert await provider.validate() is False
+        with pytest.raises(httpx.ConnectError):
+            await provider.validate()
 
     async def test_returns_false_on_http_error(self, provider, httpx_mock: HTTPXMock):
         httpx_mock.add_response(url=_MODELS_URL, method="GET", status_code=503)
-        assert await provider.validate() is False
+        with pytest.raises(httpx.HTTPStatusError):
+            await provider.validate()
 
 
 # ── 환경변수 설정 ──────────────────────────────────────────────────────────────

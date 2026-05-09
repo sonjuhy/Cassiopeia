@@ -11,7 +11,7 @@ from ..interfaces import LLMGenerateOptions, LLMUsage
 
 logger = logging.getLogger("shared_core.llm.claude")
 
-_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+_DEFAULT_MODEL = "haiku4.5"
 _DEFAULT_MAX_TOKENS = 1024
 
 
@@ -21,7 +21,7 @@ class ClaudeProvider:
 
     환경 변수:
         ANTHROPIC_API_KEY: Anthropic API 키 (필수)
-        CLAUDE_MODEL: 사용할 모델 (기본값: claude-haiku-4-5-20251001)
+        CLAUDE_MODEL: 사용할 모델 (기본값: haiku4.5)
     """
 
     def __init__(self, model: str | None = None, api_key: str | None = None) -> None:

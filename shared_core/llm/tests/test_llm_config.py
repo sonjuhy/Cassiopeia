@@ -39,8 +39,8 @@ class TestLLMConfig:
         assert cfg.backend == "claude"
 
     def test_explicit_model(self):
-        cfg = LLMConfig(backend="claude", model="claude-haiku-4-5-20251001")
-        assert cfg.model == "claude-haiku-4-5-20251001"
+        cfg = LLMConfig(backend="claude", model="haiku4.5")
+        assert cfg.model == "haiku4.5"
 
     def test_explicit_api_key(self):
         cfg = LLMConfig(backend="claude", api_key="sk-test")

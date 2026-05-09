@@ -11,7 +11,7 @@ from ..interfaces import LLMGenerateOptions, LLMUsage
 
 logger = logging.getLogger("shared_core.llm.gemini")
 
-_DEFAULT_MODEL = "gemini-2.5-flash"
+_DEFAULT_MODEL = "gemini-2.5-flash-lite"
 _DEFAULT_MAX_TOKENS = 1024
 
 
@@ -21,7 +21,7 @@ class GeminiProvider:
 
     환경 변수:
         GEMINI_API_KEY: Google AI API 키 (필수)
-        GEMINI_MODEL: 사용할 모델 (기본값: gemini-2.5-flash)
+        GEMINI_MODEL: 사용할 모델 (기본값: gemini-2.5-flash-lite)
     """
 
     def __init__(self, model: str | None = None, api_key: str | None = None) -> None:
