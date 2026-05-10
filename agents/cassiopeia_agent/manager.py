@@ -491,7 +491,11 @@ class CassiopeiaManager:
         if self._is_internal_tool(agent_name):
             return await self._run_sandbox_task(task_id, dispatch["params"])
         await self._dispatch_to_agent(agent_name, dispatch)
-        return await self.wait_for_result(task_id, timeout=timeout)
+        try:
+            return await self.wait_for_result(task_id, timeout=timeout)
+        finally:
+            # 정상 완료·타임아웃·취소 어느 경우든 현재 작업 정보 제거
+            await self._redis.delete(f"agent:{agent_name}:current_task")
 
     async def _run_sandbox_task(self, task_id: str, params: dict[str, Any]) -> dict[str, Any]:
         """SandboxTool을 통해 코드를 직접 실행하고 AgentResult 형식으로 반환합니다."""
@@ -535,6 +539,24 @@ class CassiopeiaManager:
             }
 
     async def _dispatch_to_agent(self, agent_name: str, dispatch: DispatchMessage) -> None:
+        # 현재 작업 정보를 Redis에 기록 (대시보드/상태 조회용)
+        step_info = dispatch.get("metadata", {}).get("step_info", {})
+        step_label = (
+            f"{step_info['current']}/{step_info['total']}"
+            if step_info.get("current") and step_info.get("total")
+            else ""
+        )
+        await self._redis.hset(
+            f"agent:{agent_name}:current_task",
+            mapping={
+                "task_id":    dispatch["task_id"],
+                "action":     dispatch["action"],
+                "step":       step_label,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        await self._redis.expire(f"agent:{agent_name}:current_task", 3600)  # 비정상 종료 대비 TTL
+
         await self._cassiopeia.send_message(
             action=dispatch["action"],
             payload=dict(dispatch),

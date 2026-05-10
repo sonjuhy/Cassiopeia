@@ -176,11 +176,31 @@ class HealthMonitor:
             data = json.loads(data_raw)
             health = await self._redis.hgetall(f"agent:{name}:health")
             cb_failures = await self._redis.get(f"circuit:{name}:failures")
+            current_task = await self._redis.hgetall(f"agent:{name}:current_task") or None
+
+            heartbeat_valid = _is_heartbeat_recent(health.get("last_heartbeat", ""))
+            cb_open = int(cb_failures or 0) >= _CB_THRESHOLD
+            raw_status = health.get("status", "UNKNOWN")
+
+            # 활동 상태 계산
+            if raw_status == "MAINTENANCE" or cb_open:
+                activity = "MAINTENANCE" if raw_status == "MAINTENANCE" else "CIRCUIT_OPEN"
+            elif not heartbeat_valid and data.get("lifecycle_type") == "long_running":
+                activity = "OFFLINE"
+            elif current_task:
+                activity = "BUSY"
+            else:
+                activity = "IDLE"
+
             summary[name] = {
-                "status": health.get("status", "UNKNOWN"),
+                "activity": activity,                         # IDLE | BUSY | OFFLINE | MAINTENANCE | CIRCUIT_OPEN
+                "status": raw_status,                         # 에이전트가 직접 기록한 상태값
                 "lifecycle_type": data.get("lifecycle_type", "long_running"),
-                "heartbeat_valid": _is_heartbeat_recent(health.get("last_heartbeat", "")),
-                "circuit_breaker_open": int(cb_failures or 0) >= _CB_THRESHOLD
+                "heartbeat_valid": heartbeat_valid,
+                "last_heartbeat": health.get("last_heartbeat"),
+                "circuit_breaker_open": cb_open,
+                "current_task": current_task,                 # 작업 중일 때만 존재
+                "capabilities": data.get("capabilities", []),
             }
         return summary
 

@@ -255,18 +255,38 @@ async def list_all_agents() -> dict[str, Any]:
         health = await ctx.redis_client.hgetall(f"agent:{name}:health")
         queue_len = await ctx.redis_client.llen(f"agent:{name}:tasks")
         cb = await _circuit_info(name)
+        current_task = await ctx.redis_client.hgetall(f"agent:{name}:current_task") or None
+
+        # 활동 상태 계산
+        from .health_monitor import _is_heartbeat_recent, _CB_THRESHOLD
+        heartbeat_ok = _is_heartbeat_recent(health.get("last_heartbeat", ""))
+        cb_open = cb["failure_count"] >= _CB_THRESHOLD
+        raw_status = health.get("status", "UNKNOWN")
+        if raw_status == "MAINTENANCE":
+            activity = "MAINTENANCE"
+        elif cb_open:
+            activity = "CIRCUIT_OPEN"
+        elif not heartbeat_ok and data.get("lifecycle_type") == "long_running":
+            activity = "OFFLINE"
+        elif current_task:
+            activity = "BUSY"
+        else:
+            activity = "IDLE"
+
         result[name] = {
+            "activity": activity,
             "lifecycle_type": data.get("lifecycle_type", "long_running"),
             "capabilities": data.get("capabilities", []),
             "permission_preset": data.get("permission_preset", "standard"),
             "registered_at": data.get("registered_at"),
             "health": {
-                "status": health.get("status", "UNKNOWN"),
+                "status": raw_status,
                 "last_heartbeat": health.get("last_heartbeat"),
                 "version": health.get("version"),
                 "current_tasks": health.get("current_tasks", "0"),
                 "max_concurrency": health.get("max_concurrency", "1"),
             },
+            "current_task": current_task,
             "queue_length": queue_len,
             "circuit_breaker": cb,
         }
@@ -285,6 +305,7 @@ async def get_agent_detail(
     data = await _require_agent(agent_name)
     health = await ctx.redis_client.hgetall(f"agent:{agent_name}:health")
     cb = await _circuit_info(agent_name)
+    current_task = await ctx.redis_client.hgetall(f"agent:{agent_name}:current_task") or None
     queue_key = f"agent:{agent_name}:tasks"
     queue_len = await ctx.redis_client.llen(queue_key)
 
@@ -305,9 +326,27 @@ async def get_agent_detail(
 
     available = await ctx.health_monitor.get_available_agents()
 
+    # 활동 상태 계산
+    from .health_monitor import _is_heartbeat_recent, _CB_THRESHOLD
+    heartbeat_ok = _is_heartbeat_recent(health.get("last_heartbeat", ""))
+    cb_open = cb["failure_count"] >= _CB_THRESHOLD
+    raw_status = health.get("status", "UNKNOWN")
+    if raw_status == "MAINTENANCE":
+        activity = "MAINTENANCE"
+    elif cb_open:
+        activity = "CIRCUIT_OPEN"
+    elif not heartbeat_ok and data.get("lifecycle_type") == "long_running":
+        activity = "OFFLINE"
+    elif current_task:
+        activity = "BUSY"
+    else:
+        activity = "IDLE"
+
     return {
         "agent_name": agent_name,
+        "activity": activity,
         "is_available": agent_name in available,
+        "current_task": current_task,
         "registry": {
             "lifecycle_type": data.get("lifecycle_type"),
             "capabilities": data.get("capabilities", []),
