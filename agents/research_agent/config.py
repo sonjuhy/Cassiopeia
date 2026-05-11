@@ -25,6 +25,7 @@ class ResearchAgentConfig:
     gemini_model: str = "gemini-2.5-flash"
     perplexity_model: str = "sonar"
     report_output_dir: Path = field(default_factory=lambda: Path("./reports"))
+    cassiopeia_api_key: str = ""
     fallback_provider: SearchProviderName | None = None
     fallback_api_key: str = ""
 
@@ -40,6 +41,7 @@ def load_config_from_env() -> ResearchAgentConfig:
         GEMINI_SEARCH_MODEL       : Gemini 모델 이름. 기본값 "gemini-2.5-flash".
         PERPLEXITY_SEARCH_MODEL   : Perplexity 모델 이름. 기본값 "sonar".
         RESEARCH_REPORT_OUTPUT_DIR: 보고서 저장 디렉터리. 기본값 "./reports".
+        CASSIOPEIA_API_KEY        : 오케스트라(Cassiopeia) API 키.
         RESEARCH_FALLBACK_PROVIDER: 보조 검색 공급자 ("gemini" | "perplexity"). 기본값 None.
     """
     provider: SearchProviderName = os.environ.get(  # type: ignore[assignment]
@@ -69,6 +71,7 @@ def load_config_from_env() -> ResearchAgentConfig:
         report_output_dir=Path(
             os.environ.get("RESEARCH_REPORT_OUTPUT_DIR", "./reports")
         ),
+        cassiopeia_api_key=(os.environ.get("CASSIOPEIA_API_KEY") or os.environ.get("CLIENT_API_KEY", "")).strip('"\''),
         fallback_provider=fallback_provider,
         fallback_api_key=fallback_api_key,
     )

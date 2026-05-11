@@ -102,10 +102,12 @@ class ResearchAgent:
             return f"검색 중 오류 발생: {e}"
 
     async def _dispatch(self, action: str, payload: dict, dispatch_msg: dict | None = None) -> dict[str, Any]:
-        if action == "investigate":
-            result_text = await self.investigate(payload.get("query", ""), dispatch_msg=dispatch_msg)
-            return {"status": "success", "data": result_text}
-        return {"status": "error", "message": f"알 수 없는 액션: {action}"}
+        # NLU가 임의의 액션명(search_stock_market 등)이나 파라미터(topic, query 등)를 생성할 수 있으므로 유연하게 처리
+        query = payload.get("query") or payload.get("topic") or payload.get("keyword") or str(payload)
+        
+        # 조사 에이전트는 본질적으로 검색/조사 역할 하나만 수행하므로 액션명에 구애받지 않고 investigate를 실행
+        result_text = await self.investigate(query, dispatch_msg=dispatch_msg)
+        return {"status": "success", "data": result_text}
 
     async def _report_result(
         self,
@@ -132,10 +134,14 @@ class ResearchAgent:
             payload["payload_summary"] = payload_summary
 
         url = f"{cassiopeia_url}/results"
+        headers = {}
+        if self._config.cassiopeia_api_key:
+            headers["X-API-Key"] = self._config.cassiopeia_api_key
+
         for attempt in range(3):
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.post(url, json=payload)
+                    resp = await client.post(url, json=payload, headers=headers)
                     resp.raise_for_status()
                 logger.info("[ResearchAgent] 결과 보고 완료: task_id=%s status=%s", task_id, status)
                 return
@@ -179,7 +185,10 @@ class ResearchAgent:
 
                 agent_result = {
                     "status": "COMPLETED",
-                    "result_data": {"summary": summary},
+                    "result_data": {
+                        "summary": summary,
+                        "content": raw_text
+                    },
                     "reference_id": ref_id,
                     "payload_summary": summary,
                     "error": None,

@@ -1,0 +1,17 @@
+# Research Agent (조사 에이전트) Dockerfile
+FROM python:3.12-alpine
+
+WORKDIR /app
+
+# 모노리포 구조: 필요한 모듈 복사
+COPY ./agents/__init__.py /app/agents/__init__.py
+COPY ./shared_core /app/shared_core
+COPY ./agents/research_agent /app/agents/research_agent
+
+# 의존성 설치
+RUN pip install --no-cache-dir -r /app/agents/research_agent/requirements.txt
+
+ENV PYTHONPATH=/app
+
+# 진입점: Cassiopeia 리스너 실행
+CMD ["python", "-m", "agents.research_agent.main"]
