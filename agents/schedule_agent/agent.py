@@ -59,8 +59,15 @@ class ScheduleAgent:
 
     async def _handle_list(self, payload: dict) -> dict:
         try:
-            start_time = datetime.fromisoformat(payload["start_time"])
-            end_time = datetime.fromisoformat(payload["end_time"])
+            # NLU가 시간을 파싱하지 못했을 경우 오늘을 기본값으로 사용
+            if "start_time" not in payload or "end_time" not in payload:
+                now = datetime.now(timezone.utc)
+                start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                end_time = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+            else:
+                start_time = datetime.fromisoformat(payload["start_time"])
+                end_time = datetime.fromisoformat(payload["end_time"])
+                
             events = await self._provider.get_events(start_time, end_time)
             return {"status": "success", "events": [e.__dict__ for e in events]}
         except Exception as e: return {"status": "error", "message": str(e)}
@@ -104,10 +111,14 @@ class ScheduleAgent:
             "usage_stats": {},
         }
         url = f"{cassiopeia_url}/results"
+        headers = {}
+        if self._config.cassiopeia_api_key:
+            headers["X-API-Key"] = self._config.cassiopeia_api_key
+
         for attempt in range(3):
             try:
                 async with httpx.AsyncClient(timeout=_HTTP_REPORT_TIMEOUT) as client:
-                    resp = await client.post(url, json=payload)
+                    resp = await client.post(url, json=payload, headers=headers)
                     resp.raise_for_status()
                 logger.info("[ScheduleAgent] 결과 보고 완료: task_id=%s status=%s", task_id, status)
                 return
@@ -136,7 +147,10 @@ class ScheduleAgent:
         payload 구조:
             {
                 "task_id": "...",
-                "params": { ... }  # 각 액션에 필요한 파라미터
+                "params": { 
+                    "credentials": { ... }, # 오케스트라가 주입한 시크릿
+                    ... 
+                }
             }
         """
         task_id = msg.payload.get("task_id", "unknown")
@@ -150,19 +164,36 @@ class ScheduleAgent:
             params = msg.payload.get("params", {})
             logger.info("[ScheduleAgent] 태스크 수신: task_id=%s action=%s", task_id, action)
 
+            # ── 동적 시크릿 주입 처리 ──
+            # 오케스트라가 DB에서 꺼내 주입한 credentials 가 있으면 provider 를 새로 생성합니다.
+            injected_creds = params.get("credentials", {})
+            if injected_creds:
+                logger.info("[ScheduleAgent] 동적 시크릿 주입됨: task_id=%s", task_id)
+                self._provider = GoogleCalendarProvider(
+                    calendar_id=injected_creds.get("GOOGLE_CALENDAR_ID") or self._config.calendar_id,
+                    service_account_key_json=injected_creds.get("GOOGLE_SERVICE_ACCOUNT_JSON") or "",
+                    scopes=self._config.scopes,
+                )
+
             result = await self.process_message(action, params)
 
             if result.get("status") == "error":
+                msg_text = result.get("message", "실행 오류")
+                # 자격 증명 관련 에러인 경우 /설정 명령어 안내 추가
+                if "서비스 계정 키" in msg_text or "credentials" in msg_text.lower():
+                    msg_text += "\n💡 슬랙에서 '/설정' 명령어를 입력하여 구글 캘린더 키를 등록해 주세요."
+
                 agent_result = {
                     "status": "FAILED",
                     "result_data": {},
-                    "error": {"code": "EXECUTION_ERROR", "message": result.get("message", "실행 오류"), "traceback": None},
+                    "error": {"code": "EXECUTION_ERROR", "message": msg_text, "traceback": None},
                 }
             else:
                 agent_result = {
                     "status": "COMPLETED",
                     "result_data": {
                         "summary": f"{action} 완료",
+                        "content": json.dumps(result, ensure_ascii=False, indent=2),
                         "data": result,
                     },
                     "error": None,

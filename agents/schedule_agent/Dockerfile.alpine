@@ -1,0 +1,20 @@
+# Schedule Agent Dockerfile
+FROM python:3.12-alpine
+
+WORKDIR /app
+
+# 시스템 종속성 설치 (필요 시)
+# RUN apk add --no-cache gcc musl-dev libffi-dev
+
+# 모노리포 구조: 필요한 모듈 복사
+COPY ./agents/__init__.py /app/agents/__init__.py
+COPY ./shared_core /app/shared_core
+COPY ./agents/schedule_agent /app/agents/schedule_agent
+
+# 의존성 설치
+RUN pip install --no-cache-dir -r /app/agents/schedule_agent/requirements.txt
+
+ENV PYTHONPATH=/app
+
+# 진입점: Cassiopeia 리스너 실행
+CMD ["python", "-m", "agents.schedule_agent.main"]
