@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from collections import deque
 from contextlib import asynccontextmanager
@@ -251,6 +252,24 @@ async def lifespan(app: FastAPI):
         await ack()
         await _handle_approval_action(body, action="cancel", say=say)
 
+    # ── 설정 위저드 핸들러 ────────────────────────────────────────────────────
+
+    @bolt_app.command("/설정")
+    async def handle_setup_command(ack: Any, body: dict) -> None:
+        if _ctx.comm_agent:
+            await _ctx.comm_agent.handle_setup_command(ack, body)
+
+    @bolt_app.action(re.compile("setup_agent_.*"))
+    async def handle_setup_agent_click(ack: Any, body: dict) -> None:
+        if _ctx.comm_agent:
+            await _ctx.comm_agent.handle_setup_agent_click(ack, body)
+
+    @bolt_app.view("setup_secrets_modal")
+    async def handle_setup_modal_submission(ack: Any, body: dict, view: dict) -> None:
+        if _ctx.comm_agent:
+            await _ctx.comm_agent.handle_modal_submission(ack, body, view)
+
+    # ─── Socket Mode 핸들러 시작 ───
     # Notion 링크 버튼은 URL 전용이므로 ack만 처리
     @bolt_app.action("open_notion")
     async def handle_open_notion(ack: Any) -> None:
@@ -359,15 +378,32 @@ async def _handle_approval_action(
     }
     label = action_labels.get(action, action)
 
-    thread_ts: str | None = None
-    ctx = await _ctx.redis.get_task_context(task_id)
-    if ctx:
-        thread_ts = ctx.get("thread_ts")
-
-    await say(
-        text=f"{label} — <@{user_id}>님이 처리했습니다.",
-        thread_ts=thread_ts,
-    )
+    # 원본 메시지의 버튼 블록을 제거하고 결과 텍스트로 업데이트합니다.
+    message_ts = body.get("message", {}).get("ts")
+    if message_ts and _ctx.web_client:
+        try:
+            original_blocks = body.get("message", {}).get("blocks", [])
+            # 텍스트 섹션(content)만 남기고 actions(버튼) 블록 제거
+            new_blocks = [b for b in original_blocks if b.get("type") != "actions"]
+            new_blocks.append({
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": f"*{label}* — <@{user_id}>님이 처리했습니다."}]
+            })
+            
+            await _ctx.web_client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                blocks=new_blocks,
+                text=f"{label} 처리됨"
+            )
+        except Exception as e:
+            logger.error("[action] 원본 메시지 업데이트 실패: %s", e)
+            # 폴백: 업데이트 실패 시 스레드에 메시지 남김
+            thread_ts: str | None = None
+            ctx = await _ctx.redis.get_task_context(task_id)
+            if ctx:
+                thread_ts = ctx.get("thread_ts")
+            await say(text=f"{label} — <@{user_id}>님이 처리했습니다.", thread_ts=thread_ts)
 
 
 # ─── FastAPI 앱 정의 ─────────────────────────────────────────────────────────────

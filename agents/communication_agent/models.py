@@ -2,6 +2,8 @@
 Communication Agent 데이터 모델 (Python 3.12+)
 """
 
+import json
+import os
 from typing import Any, TypedDict
 
 # Python 3.12: PEP 695 Type Aliases
@@ -11,11 +13,26 @@ type ExecutionResult = tuple[bool, str]
 type SlackMessage = dict[str, Any]
 type AgentName = str
 
+
+def _build_agent_registry() -> dict[str, str]:
+    """에이전트 레지스트리를 환경변수 COMM_AGENT_REGISTRY(JSON)에서 빌드합니다.
+    미설정 시 빈 딕셔너리를 반환합니다.
+
+    예시:
+        COMM_AGENT_REGISTRY='{"archive_agent": "문서/기획 처리", "file_agent": "파일 처리"}'
+    """
+    raw = os.environ.get("COMM_AGENT_REGISTRY", "").strip()
+    if raw:
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
 # 에이전트 레지스트리: 에이전트 이름 → 역할 설명
-AGENT_REGISTRY: dict[str, str] = {
-    "archive_agent": "소프트웨어 기획, 요구사항 분석, 설계 문서 작성, 태스크 분해 요청을 처리합니다.",
-    "slack_agent": "Slack 알림 발송, 메시지 전달 등 커뮤니케이션 요청을 처리합니다.",
-}
+# 환경변수 COMM_AGENT_REGISTRY(JSON)로 재정의하세요. 코드를 수정하지 마세요.
+AGENT_REGISTRY: dict[str, str] = _build_agent_registry()
 
 
 class SlackEvent(TypedDict):
@@ -74,7 +91,7 @@ class CassiopeiaTask(TypedDict):
     session_id: str        # 카시오페아 NLU 컨텍스트 주입용 (format: user_id:channel_id)
     requester: CassiopeiaTaskRequester
     content: str
-    source: str            # 항상 "slack"
+    source: str            # 소스 플랫폼 식별자 (slack | discord | telegram | ...)
     thread_ts: str | None  # 스레드 루트 ts (세션 연속성용)
 
 

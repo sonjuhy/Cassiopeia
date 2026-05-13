@@ -10,12 +10,14 @@ import os
 from ..models import AgentName, ExecutionResult, SlackEvent
 
 # 에이전트 서비스 이름 → Docker 이미지 이름 매핑
-# 환경변수 AGENT_IMAGE_{AGENT_NAME_UPPER} 로 재정의 가능
-# 예) AGENT_IMAGE_ARCHIVE_AGENT=myrepo/archive_agent:latest
-_DEFAULT_IMAGE_MAP: dict[str, str] = {
-    "archive_agent": "agentmonorepo-archive_agent",
-    "slack_agent": "agentmonorepo-slack_agent",
-}
+#
+# [우선순위 - 높은 것부터]
+# 1. 환경변수 AGENT_IMAGE_{AGENT_NAME_UPPER}  (예: AGENT_IMAGE_ARCHIVE_AGENT=myrepo/archive_agent:latest)
+# 2. 컨벤션 기반 이름: "agentmonorepo-{agent_name}" (docker-compose 기본 네이밍 규칙)
+#
+# 하드코딩된 매핑은 없습니다. 새 에이전트를 추가할 때 이 파일을 수정할 필요가 없습니다.
+# COMM_AGENT_REGISTRY 에 등록된 에이전트 이름이 자동으로 컨벤션 기반 이미지명을 사용합니다.
+_DEFAULT_IMAGE_MAP: dict[str, str] = {}
 
 # 에이전트에 전달할 환경변수 키 목록 (호스트 환경변수에서 자동 전달)
 _PASSTHROUGH_ENV_KEYS: list[str] = [
@@ -27,9 +29,15 @@ _PASSTHROUGH_ENV_KEYS: list[str] = [
 ]
 
 
-def _resolve_image(agent_name: AgentName) -> str | None:
+def _resolve_image(agent_name: AgentName) -> str:
+    """에이전트 이름에 해당하는 Docker 이미지명을 반환합니다.
+
+    우선순위:
+    1. 환경변수 AGENT_IMAGE_{AGENT_NAME_UPPER} (예: AGENT_IMAGE_ARCHIVE_AGENT)
+    2. 컨벤션 기반 이름: agentmonorepo-{agent_name}
+    """
     env_key = f"AGENT_IMAGE_{agent_name.upper()}"
-    return os.environ.get(env_key) or _DEFAULT_IMAGE_MAP.get(agent_name)
+    return os.environ.get(env_key) or _DEFAULT_IMAGE_MAP.get(agent_name) or f"agentmonorepo-{agent_name}"
 
 
 def _build_env_args(event: SlackEvent) -> list[str]:
@@ -72,8 +80,6 @@ class DockerDispatcher:
             ExecutionResult: (성공 여부, 처리 결과 메시지)
         """
         image = _resolve_image(agent_name)
-        if not image:
-            return (False, f"이미지 미설정 에이전트: {agent_name}")
 
         env_args = _build_env_args(event)
         cmd = ["docker", "run", "--rm", "--detach", *env_args, image]

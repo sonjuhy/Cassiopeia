@@ -296,7 +296,11 @@ class SlackCommAgent:
             return
 
         # 최종 결과 전송
-        if requires_approval:
+        if result.get("action") == "start_setup_wizard":
+            # 설정 위저드 전용 UI 블록 생성
+            blocks = self._build_setup_wizard_blocks()
+            text_fallback = "⚙️ 에이전트 설정 위저드"
+        elif requires_approval:
             blocks = self.build_approval_blocks(content, task_id)
             text_fallback = f"⚠️ 실행 승인 요청: {content[:100]}"
         else:
@@ -309,6 +313,27 @@ class SlackCommAgent:
             text=text_fallback,
             thread_ts=thread_ts,
         )
+
+    def _build_setup_wizard_blocks(self) -> list[dict[str, Any]]:
+        """설정 위저드 시작 버튼 블록을 생성합니다."""
+        agents = ["schedule-agent", "research-agent", "archive_agent"]
+        return [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "⚙️ *에이전트 설정 위저드*\n설정이 필요한 에이전트를 선택하여 키를 등록하세요."}
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": agent, "emoji": True},
+                        "value": agent,
+                        "action_id": f"setup_agent_{agent}"
+                    } for agent in agents
+                ]
+            }
+        ]
 
     async def _post_progress_update(
         self,
@@ -396,6 +421,117 @@ class SlackCommAgent:
                 ],
             },
         ]
+
+    # ── Setup Wizard: 대화형 설정 ─────────────────────────────────────────────
+
+    async def handle_setup_command(self, ack: Any, body: dict[str, Any]) -> None:
+        """'/설정' 명령어 처리: 에이전트 선택 메뉴를 보냅니다."""
+        await ack()
+        
+        agents = ["schedule-agent", "research-agent", "archive_agent"]
+
+        blocks = [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "⚙️ *에이전트 설정 위저드*\n설정(API 키 등록 등)이 필요한 에이전트를 선택하세요."}
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": agent, "emoji": True},
+                        "value": agent,
+                        "action_id": f"setup_agent_{agent}"
+                    } for agent in agents
+                ]
+            }
+        ]
+        
+        await self._web_client.chat_postMessage(
+            channel=body["channel_id"],
+            text="어떤 에이전트의 설정을 변경하시겠습니까?",
+            blocks=blocks
+        )
+
+    async def handle_setup_agent_click(self, ack: Any, body: dict[str, Any]) -> None:
+        """에이전트 선택 버튼 클릭 시 키 입력 모달을 띄웁니다."""
+        await ack()
+        action = body["actions"][0]
+        agent_name = action["value"]
+        
+        required_keys = {
+            "schedule-agent": "GOOGLE_SERVICE_ACCOUNT_JSON, GOOGLE_CALENDAR_ID",
+            "research-agent": "GEMINI_API_KEY, PERPLEXITY_API_KEY",
+            "archive_agent": "NOTION_TOKEN, NOTION_DB_ID"
+        }
+        guide = required_keys.get(agent_name, "필요한 설정을 입력하세요.")
+
+        view = {
+            "type": "modal",
+            "callback_id": "setup_secrets_modal",
+            "private_metadata": agent_name,
+            "title": {"type": "plain_text", "text": "에이전트 키 설정"},
+            "submit": {"type": "plain_text", "text": "저장"},
+            "close": {"type": "plain_text", "text": "취소"},
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*{agent_name}* 설정을 위한 JSON 데이터를 입력하세요.\n가이드: `{guide}`"}
+                },
+                {
+                    "type": "input",
+                    "block_id": "secret_input_block",
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "secrets_json",
+                        "multiline": True,
+                        "placeholder": {"type": "plain_text", "text": '{"KEY": "VALUE"}'}
+                    },
+                    "label": {"type": "plain_text", "text": "설정 데이터 (JSON)"}
+                }
+            ]
+        }
+        await self._web_client.views_open(trigger_id=body["trigger_id"], view=view)
+
+    async def handle_modal_submission(self, ack: Any, body: dict[str, Any], view: dict[str, Any]) -> None:
+        """모달 제출 시 데이터를 검증하고 Admin API를 통해 오케스트라에 저장합니다."""
+        agent_name = view["private_metadata"]
+        raw_input = view["state"]["values"]["secret_input_block"]["secrets_json"]["value"]
+        
+        import httpx
+        try:
+            secrets = json.loads(raw_input)
+            if not isinstance(secrets, dict):
+                raise ValueError("JSON 객체(dict) 형식이어야 합니다.")
+        except Exception as e:
+            await ack(response_action="errors", errors={"secret_input_block": f"유효한 JSON이 아닙니다: {e}"})
+            return
+
+        await ack()
+
+        cassiopeia_url = os.environ.get("CASSIOPEIA_URL", "http://cassiopeia-agent:8001").strip("/")
+        admin_key = os.environ.get("ADMIN_API_KEY", "").strip('"\'')
+        
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{cassiopeia_url}/admin/secrets/{agent_name}",
+                    json=secrets,
+                    headers={"X-API-Key": admin_key}
+                )
+                resp.raise_for_status()
+            
+            await self._web_client.chat_postMessage(
+                channel=body["user"]["id"],
+                text=f"✅ *{agent_name}* 설정이 성공적으로 저장되었습니다."
+            )
+        except Exception as e:
+            logger.error("[setup] 시크릿 저장 실패: %s", e)
+            await self._web_client.chat_postMessage(
+                channel=body["user"]["id"],
+                text=f"❌ *{agent_name}* 설정 저장 중 오류가 발생했습니다: {e}"
+            )
 
     def _build_standard_blocks(
         self, content: str, agent_name: str
