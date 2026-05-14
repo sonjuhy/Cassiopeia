@@ -1,9 +1,12 @@
 from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 from pydantic import BaseModel, Field, ConfigDict
 
-type AgentName = Literal["cassiopeia", "schedule", "file", "slack", "planning", "research"]
+# AgentName 은 열거 타입이 아닌 str 별칭입니다.
+# 에이전트 이름을 Literal 로 고정하면 새 에이전트 추가 시 shared_core 를 수정해야 하는
+# 강한 결합이 발생합니다. str 을 사용해 런타임 레지스트리(Redis) 기반으로 유효성을 검사하세요.
+type AgentName = str
 type ActionName = str
 
 class AgentMessage(BaseModel):
