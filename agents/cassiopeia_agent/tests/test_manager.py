@@ -183,20 +183,17 @@ class TestPushToDlq:
         assert entry["reason"] == "http_failed"
 
 
-# ── _get_comm_queue ───────────────────────────────────────────────────────────
+# ── _get_comm_receiver ───────────────────────────────────────────────────────────
 
-class TestGetCommQueue:
+class TestGetCommReceiver:
     def test_slack_source(self, manager):
-        task = {**_BASE_TASK, "source": "slack"}
-        assert manager._get_comm_queue(task) == "agent:communication:tasks"
+        assert manager._get_comm_receiver("slack") == "communication_agent"
 
     def test_discord_source(self, manager):
-        task = {**_BASE_TASK, "source": "discord"}
-        assert manager._get_comm_queue(task) == "agent:communication:discord:tasks"
+        assert manager._get_comm_receiver("discord") == "discord_communication_agent"
 
     def test_unknown_source_defaults_to_slack(self, manager):
-        task = {**_BASE_TASK, "source": "unknown_platform"}
-        assert manager._get_comm_queue(task) == "agent:communication:tasks"
+        assert manager._get_comm_receiver("unknown_platform") == "communication_agent"
 
 
 # ── process_task: direct_response ─────────────────────────────────────────────
