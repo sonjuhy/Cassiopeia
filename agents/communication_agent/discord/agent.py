@@ -9,11 +9,13 @@ Discord 소통 에이전트 (DiscordCommAgent)
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import uuid
 from typing import Any
 
+import httpx
 import discord
 import discord.ui
 from cassiopeia_sdk.client import CassiopeiaClient
@@ -96,6 +98,72 @@ class ApprovalView(discord.ui.View):
             if isinstance(item, discord.ui.Button):
                 item.disabled = True
 
+class SetupModal(discord.ui.Modal, title='에이전트 키 설정'):
+    def __init__(self, agent_name: str, guide: str) -> None:
+        super().__init__(title=f"{agent_name[:30]} 키 설정")
+        self.agent_name = agent_name
+        self.secrets_input = discord.ui.TextInput(
+            label="설정 데이터 (JSON)",
+            style=discord.TextStyle.paragraph,
+            placeholder='{"KEY": "VALUE"}',
+            default=f"// 가이드: {guide}\n{{\n\n}}",
+            required=True,
+            max_length=4000
+        )
+        self.add_item(self.secrets_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw_input = self.secrets_input.value
+        lines = [line for line in raw_input.split('\n') if not line.strip().startswith('//')]
+        clean_input = '\n'.join(lines)
+
+        try:
+            secrets = json.loads(clean_input)
+            if not isinstance(secrets, dict):
+                raise ValueError("JSON 객체(dict) 형식이어야 합니다.")
+        except Exception as e:
+            await interaction.response.send_message(f"❌ 유효한 JSON이 아닙니다: {e}", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        cassiopeia_url = os.environ.get("CASSIOPEIA_URL", "http://cassiopeia-agent:8001").strip("/")
+        admin_key = os.environ.get("ADMIN_API_KEY", "").strip('"\'')
+        
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{cassiopeia_url}/admin/secrets/{self.agent_name}",
+                    json=secrets,
+                    headers={"X-API-Key": admin_key}
+                )
+                resp.raise_for_status()
+            
+            await interaction.followup.send(f"✅ *{self.agent_name}* 설정이 성공적으로 저장되었습니다.", ephemeral=True)
+        except Exception as e:
+            logger.error("[setup] 시크릿 저장 실패: %s", e)
+            await interaction.followup.send(f"❌ *{self.agent_name}* 설정 저장 중 오류가 발생했습니다: {e}", ephemeral=True)
+
+class SetupAgentButton(discord.ui.Button):
+    def __init__(self, agent_name: str, guide: str) -> None:
+        super().__init__(label=agent_name, style=discord.ButtonStyle.primary, custom_id=f"setup_{agent_name[:80]}")
+        self.agent_name = agent_name
+        self.guide = guide
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        modal = SetupModal(self.agent_name, self.guide)
+        await interaction.response.send_modal(modal)
+
+class SetupAgentSelectView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+        agents_guide = {
+            "schedule-agent": "GOOGLE_SERVICE_ACCOUNT_JSON, GOOGLE_CALENDAR_ID",
+            "research-agent": "GEMINI_API_KEY, PERPLEXITY_API_KEY",
+            "archive_agent": "NOTION_TOKEN, NOTION_DB_ID"
+        }
+        for name, guide in agents_guide.items():
+            self.add_item(SetupAgentButton(name, guide))
 
 class DiscordCommAgent:
     """
@@ -124,6 +192,11 @@ class DiscordCommAgent:
 
     def set_client(self, client: discord.Client) -> None:
         self._client = client
+
+    async def handle_setup_command(self, message: discord.Message) -> None:
+        """'/설정' 명령어 처리: 에이전트 선택 메뉴를 보냅니다."""
+        view = SetupAgentSelectView()
+        await message.reply("⚙️ **에이전트 설정 위저드**\n설정(API 키 등록 등)이 필요한 에이전트를 선택하세요.", view=view)
 
     async def _ensure_cassiopeia(self) -> CassiopeiaClient:
         if self._cassiopeia is None:
@@ -215,9 +288,16 @@ class DiscordCommAgent:
 
     async def _heartbeat_loop(self) -> None:
         from datetime import datetime, timezone
+        
+        nlu_desc = (
+            "- discord_communication_agent: 디스코드 사용자와의 대화, 추가 질문(ask_clarification), "
+            "또는 명확하지 않은 요청에 대해 답변할 때 사용합니다. (actions: ask_clarification, send_message)"
+        )
+
         while True:
             try:
                 if self._redis:
+                    # 1. 헬스 상태 업데이트
                     await self._redis.update_agent_health(
                         self.agent_name,
                         {
@@ -226,11 +306,25 @@ class DiscordCommAgent:
                             "version": "1.0.0",
                         },
                     )
+                    
+                    # 2. 중앙 레지스트리에 능력치 등록 (동적 라우팅용)
+                    await self._redis.update_agent_registry(
+                        self.agent_name,
+                        {
+                            "name": self.agent_name,
+                            "lifecycle_type": "long_running",
+                            "nlu_description": nlu_desc,
+                            "capabilities": ["message", "discord"],
+                            "registered_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+                    
+                    logger.debug("[DiscordAgent] 하트비트/레지스트리 갱신 완료 (agent=%s)", self.agent_name)
                 await asyncio.sleep(15)
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("[DiscordAgent] 하트비트 전송 실패: %s", e)
+                logger.error("[DiscordAgent] 하트비트 갱신 실패: %s", e)
                 await asyncio.sleep(5)
 
     async def _handle_system_result(self, result: dict[str, Any]) -> None:

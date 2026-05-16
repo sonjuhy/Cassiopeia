@@ -62,6 +62,9 @@ _ctx = _AppContext()
 
 # ─── Telegram 핸들러 ────────────────────────────────────────────────────────────
 
+async def _handle_setup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _ctx.comm_agent is not None and update.message:
+        await _ctx.comm_agent.handle_setup_command(update.message)
 
 async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Telegram 텍스트 메시지를 수신하여 TelegramCommAgent로 전달합니다."""
@@ -76,6 +79,13 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     text = msg.text.strip()
     if not text:
         return
+
+    # 설정 JSON 입력 응답 처리
+    if msg.reply_to_message and msg.reply_to_message.from_user and msg.reply_to_message.from_user.is_bot:
+        if "키 설정을 위한 JSON 데이터를 입력" in (msg.reply_to_message.text or ""):
+            if _ctx.comm_agent is not None:
+                await _ctx.comm_agent.handle_setup_reply(msg)
+            return
 
     event = TelegramEvent(
         user_id=str(user.id),
@@ -115,6 +125,10 @@ async def _handle_callback_query(
     action, task_id = data.split(":", 1)
     user_id = str(query.from_user.id) if query.from_user else ""
     chat_id = str(query.message.chat_id) if query.message else ""
+
+    if action == "setup_agent" and _ctx.comm_agent is not None:
+        await _ctx.comm_agent.handle_setup_callback(query, task_id)
+        return
 
     if _ctx.comm_agent is not None:
         await _ctx.comm_agent.on_approval_callback(
@@ -172,6 +186,8 @@ async def lifespan(app: FastAPI):
     )
 
     # ── 핸들러 등록 ──
+    _ctx.ptb_app.add_handler(CommandHandler("setup", _handle_setup_command))
+    _ctx.ptb_app.add_handler(CommandHandler("설정", _handle_setup_command))
     _ctx.ptb_app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message)
     )

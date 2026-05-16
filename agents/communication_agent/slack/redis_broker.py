@@ -110,6 +110,10 @@ class RedisBroker:
         await self._client.hset(key, mapping=fields)
         await self._client.expire(key, 60)
 
+    async def update_agent_registry(self, agent_name: str, registry_data: dict[str, Any]) -> None:
+        """agents:registry Hash에 에이전트 정보를 등록합니다 (동적 라우팅용)."""
+        await self._client.hset("agents:registry", agent_name, json.dumps(registry_data, ensure_ascii=False))
+
     async def close(self) -> None:
         """Redis 연결을 종료합니다."""
         await self._client.aclose()

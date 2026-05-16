@@ -57,7 +57,7 @@ import json
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
@@ -179,6 +179,61 @@ class SandboxKeyGenerateBody(BaseModel):
     label: str = Field(..., description="키 식별을 위한 라벨 (예: 'prod-cassiopeia')")
 
 
+# ── api_spec 관련 요청 모델 ───────────────────────────────────────────────────
+
+class SystemControlBody(BaseModel):
+    action: Literal["terminate", "restart", "optimize"] = Field(
+        ..., description="제어 액션: terminate | restart | optimize"
+    )
+    target: Literal["all", "core_engine", "network_mesh"] = Field(
+        ..., description="제어 대상: all | core_engine | network_mesh"
+    )
+
+
+class SystemRepairBody(BaseModel):
+    module_id: Literal["core_engine", "network_mesh"] = Field(
+        ..., description="복구 모듈: core_engine | network_mesh"
+    )
+    repair_type: Literal["hotfix", "full_reinstall"] = Field(
+        ..., description="복구 유형: hotfix | full_reinstall"
+    )
+
+
+_VALID_PROTOCOLS = {"TCP", "UDP", "ICMP"}
+_VALID_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+
+
+class FirewallRuleBody(BaseModel):
+    rule_name: str = Field(..., min_length=1, max_length=200)
+    protocol: str = Field(..., min_length=1, max_length=10)
+    port: int = Field(..., ge=1, le=65535, description="포트 번호 (1-65535)")
+    action: Literal["allow", "deny"] = Field(..., description="허용 또는 차단")
+
+
+class EndpointRegistrationBody(BaseModel):
+    path: str = Field(..., min_length=1, max_length=500)
+    method: str = Field(..., min_length=1, max_length=10)
+    target_service: str = Field(..., min_length=1, max_length=500)
+
+    @field_validator("method")
+    @classmethod
+    def validate_http_method(cls, v: str) -> str:
+        upper = v.upper()
+        if upper not in _VALID_HTTP_METHODS:
+            raise ValueError(
+                f"유효하지 않은 HTTP 메서드: '{v}'. "
+                f"허용 값: {sorted(_VALID_HTTP_METHODS)}"
+            )
+        return upper
+
+    @field_validator("path")
+    @classmethod
+    def validate_path_starts_with_slash(cls, v: str) -> str:
+        if not v.startswith("/"):
+            raise ValueError("path는 '/'로 시작해야 합니다.")
+        return v
+
+
 # ── 헬퍼 ──────────────────────────────────────────────────────────────────────
 
 async def _require_agent(agent_name: str) -> dict[str, Any]:
@@ -260,7 +315,7 @@ async def list_all_agents() -> dict[str, Any]:
         # 활동 상태 계산
         from .health_monitor import _is_heartbeat_recent, _CB_THRESHOLD
         heartbeat_ok = _is_heartbeat_recent(health.get("last_heartbeat", ""))
-        cb_open = cb["failure_count"] >= _CB_THRESHOLD
+        cb_open = cb["failures"] >= _CB_THRESHOLD
         raw_status = health.get("status", "UNKNOWN")
         if raw_status == "MAINTENANCE":
             activity = "MAINTENANCE"
@@ -329,7 +384,7 @@ async def get_agent_detail(
     # 활동 상태 계산
     from .health_monitor import _is_heartbeat_recent, _CB_THRESHOLD
     heartbeat_ok = _is_heartbeat_recent(health.get("last_heartbeat", ""))
-    cb_open = cb["failure_count"] >= _CB_THRESHOLD
+    cb_open = cb["failures"] >= _CB_THRESHOLD
     raw_status = health.get("status", "UNKNOWN")
     if raw_status == "MAINTENANCE":
         activity = "MAINTENANCE"
@@ -997,6 +1052,41 @@ async def clear_dlq() -> dict[str, Any]:
     return {"cleared": count, "message": f"DLQ에서 {count}개 항목이 삭제되었습니다."}
 
 
+# ── 에이전트 시크릿 관리 ──────────────────────────────────────────────────
+
+@router.get("/secrets/{agent_name}", summary="에이전트별 시크릿 조회")
+async def get_agent_secrets(agent_name: str) -> dict[str, str]:
+    """저장된 에이전트 시크릿(API 키 등)을 조회합니다."""
+    return await ctx.state_manager.get_agent_secrets(agent_name)
+
+
+@router.post("/secrets/{agent_name}", summary="에이전트별 시크릿 저장/업데이트")
+async def save_agent_secrets(agent_name: str, secrets: dict[str, str]) -> dict[str, str]:
+    """에이전트 시크릿을 암호화하여 저장합니다."""
+    # ── 고의적인 공격 방어를 위한 보안 검증 ──
+    if len(secrets) > 20:
+        raise HTTPException(status_code=400, detail="너무 많은 시크릿 키가 제공되었습니다. (최대 20개)")
+    
+    for key, value in secrets.items():
+        if len(key) > 100:
+            raise HTTPException(status_code=400, detail=f"시크릿 키 이름이 너무 깁니다: {key[:20]}...")
+        # 환경변수로 사용될 수 있으므로 알파벳 대소문자, 숫자, 언더스코어(_) 정도만 허용
+        if not re.match(r"^[a-zA-Z0-9_]+$", key):
+            raise HTTPException(status_code=400, detail=f"유효하지 않은 시크릿 키 이름입니다 (알파벳, 숫자, _ 만 허용): {key}")
+        if len(value) > 4096:
+            raise HTTPException(status_code=400, detail=f"시크릿 값이 너무 깁니다. (최대 4096자): {key}")
+
+    await ctx.state_manager.save_agent_secrets(agent_name, secrets)
+    return {"status": "saved", "agent_name": agent_name}
+
+
+@router.delete("/secrets/{agent_name}", summary="에이전트별 시크릿 삭제")
+async def delete_agent_secrets(agent_name: str) -> dict[str, str]:
+    """에이전트 시크릿을 삭제합니다."""
+    await ctx.state_manager.delete_agent_secrets(agent_name)
+    return {"status": "deleted", "agent_name": agent_name}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 샌드박스 키 관리
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1040,22 +1130,209 @@ async def generate_sandbox_key(body: SandboxKeyGenerateBody) -> dict[str, Any]:
 async def delete_sandbox_key(key_prefix: str) -> dict[str, Any]:
     """마스킹된 키 프리픽스(앞 8자리)를 기반으로 해당 키를 삭제합니다."""
     all_keys = await ctx.redis_client.hkeys(_SANDBOX_KEYS_HASH)
-    
+
     target_key: str | None = None
     for k in all_keys:
         if k.startswith(key_prefix):
             target_key = k
             break
-            
+
     if not target_key:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"프리픽스 '{key_prefix}'로 시작하는 키를 찾을 수 없습니다."
         )
-        
+
     await ctx.redis_client.hdel(_SANDBOX_KEYS_HASH, target_key)
-    
+
     return {
         "status": "deleted",
         "deleted_prefix": key_prefix
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# api_spec — 시스템 제어 & 복구
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/system/control", summary="시스템 상태 제어 (terminate / restart / optimize)")
+async def system_control(body: SystemControlBody) -> dict[str, Any]:
+    """
+    시스템의 물리적/논리적 상태를 변경합니다.
+
+    흐름:
+      1. 명령을 system:ops:pending 큐에 push → SystemExecutor 가 BLPOP 으로 소비
+      2. 이력은 system:ops:log 에도 기록
+      3. 실행 결과는 system:control:{command_id} 해시에 업데이트됨
+    """
+    ts = datetime.now(timezone.utc).isoformat()
+    command_id = f"cmd-{uuid.uuid4().hex[:8]}"
+
+    command = {
+        "command_id": command_id,
+        "action": body.action,
+        "target": body.target,
+        "timestamp": ts,
+    }
+    # 실행 큐 — SystemExecutor 가 소비
+    await ctx.redis_client.rpush("system:ops:pending", json.dumps(command, ensure_ascii=False))
+    # 이력 큐 — 감사 로그 용도
+    await ctx.redis_client.lpush("system:ops:log", json.dumps(command, ensure_ascii=False))
+
+    return {
+        "status": "success",
+        "message": f"System {body.action} initiated for target '{body.target}'.",
+        "timestamp": ts,
+        "command_id": command_id,
+    }
+
+
+async def _do_repair(body: SystemRepairBody) -> dict[str, Any]:
+    """복구 프로토콜 공유 로직 — /system/repair 와 /system/recovery/repair 에서 호출."""
+    repair_id = f"rep-{uuid.uuid4().hex[:5]}"
+    started_at = datetime.now(timezone.utc).isoformat()
+    estimated = "45s" if body.repair_type == "hotfix" else "5m"
+
+    # 상태 해시 초기화
+    await ctx.redis_client.hset(
+        f"system:repair:{repair_id}",
+        mapping={
+            "status": "in_progress",
+            "module_id": body.module_id,
+            "repair_type": body.repair_type,
+            "started_at": started_at,
+            "estimated_time": estimated,
+        },
+    )
+    # 실행 큐 — SystemExecutor 가 소비
+    command = {
+        "repair_id": repair_id,
+        "module_id": body.module_id,
+        "repair_type": body.repair_type,
+        "started_at": started_at,
+    }
+    await ctx.redis_client.rpush(
+        "system:repair:pending",
+        json.dumps(command, ensure_ascii=False),
+    )
+    return {
+        "repair_id": repair_id,
+        "status": "in_progress",
+        "estimated_time": estimated,
+    }
+
+
+@router.post("/system/repair", summary="시스템 복구 실행 (Repair) — 하위 호환 경로")
+async def system_repair(body: SystemRepairBody) -> dict[str, Any]:
+    """
+    특정 모듈의 장애를 해결하기 위한 복구 프로토콜을 실행합니다.
+    (하위 호환성 경로 — 스펙 정확 경로는 /system/recovery/repair)
+    """
+    return await _do_repair(body)
+
+
+@router.post("/system/recovery/repair", summary="시스템 복구 실행 (Repair) — 스펙 경로")
+async def system_recovery_repair(body: SystemRepairBody) -> dict[str, Any]:
+    """
+    특정 모듈의 장애를 해결하기 위한 복구 프로토콜을 실행합니다.
+    (api_spec.md 정확 경로: POST /system/recovery/repair)
+
+    흐름:
+      1. system:repair:{repair_id} 해시를 in_progress 로 초기화
+      2. 명령을 system:repair:pending 큐에 push → SystemExecutor 가 소비
+      3. 완료/실패 시 해시 status 가 completed/failed 로 업데이트됨
+    """
+    return await _do_repair(body)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# api_spec — 방화벽 규칙 관리
+# ══════════════════════════════════════════════════════════════════════════════
+
+_FIREWALL_RULES_KEY = "system:firewall:rules"
+
+
+@router.post(
+    "/endpoints/firewall/rules",
+    status_code=status.HTTP_201_CREATED,
+    summary="방화벽 규칙 등록",
+)
+async def create_firewall_rule(body: FirewallRuleBody) -> dict[str, Any]:
+    """
+    방화벽 규칙을 Redis 해시(system:firewall:rules)에 저장합니다.
+    키는 rule_name, 값은 규칙 전체 JSON입니다.
+    """
+    rule_id = f"rule-{uuid.uuid4().hex[:6]}"
+    rule_data: dict[str, Any] = {
+        **body.model_dump(),
+        "id": rule_id,
+        "status": "active",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await ctx.redis_client.hset(
+        _FIREWALL_RULES_KEY,
+        body.rule_name,
+        json.dumps(rule_data, ensure_ascii=False),
+    )
+    return {"id": rule_id, "status": "active"}
+
+
+@router.get("/endpoints/firewall/rules", summary="방화벽 규칙 목록 조회")
+async def list_firewall_rules() -> dict[str, Any]:
+    """등록된 모든 방화벽 규칙 목록을 반환합니다."""
+    keys = await ctx.redis_client.hkeys(_FIREWALL_RULES_KEY)
+    rules: list[dict[str, Any]] = []
+    for k in keys:
+        raw = await ctx.redis_client.hget(_FIREWALL_RULES_KEY, k)
+        if raw:
+            try:
+                rules.append(json.loads(raw))
+            except Exception:
+                pass
+    return {"rules": rules}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# api_spec — 엔드포인트 등록 & 조회
+# ══════════════════════════════════════════════════════════════════════════════
+
+_ENDPOINTS_KEY = "system:endpoints"
+
+
+@router.post(
+    "/endpoints",
+    status_code=status.HTTP_201_CREATED,
+    summary="신규 엔드포인트 등록",
+)
+async def register_endpoint(body: EndpointRegistrationBody) -> dict[str, Any]:
+    """
+    새 API 엔드포인트를 레지스트리에 등록합니다.
+    endpoint_id를 키로 Redis 해시(system:endpoints)에 저장됩니다.
+    """
+    endpoint_id = f"end-{uuid.uuid4().hex[:6]}"
+    endpoint_data: dict[str, Any] = {
+        **body.model_dump(),
+        "endpoint_id": endpoint_id,
+        "registered_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await ctx.redis_client.hset(
+        _ENDPOINTS_KEY,
+        endpoint_id,
+        json.dumps(endpoint_data, ensure_ascii=False),
+    )
+    return {"endpoint_id": endpoint_id}
+
+
+@router.get("/endpoints", summary="등록된 엔드포인트 목록 조회")
+async def list_endpoints() -> dict[str, Any]:
+    """등록된 모든 엔드포인트 목록을 반환합니다."""
+    keys = await ctx.redis_client.hkeys(_ENDPOINTS_KEY)
+    endpoints: list[dict[str, Any]] = []
+    for k in keys:
+        raw = await ctx.redis_client.hget(_ENDPOINTS_KEY, k)
+        if raw:
+            try:
+                endpoints.append(json.loads(raw))
+            except Exception:
+                pass
+    return {"endpoints": endpoints}

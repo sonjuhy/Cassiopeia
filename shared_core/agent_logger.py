@@ -89,9 +89,16 @@ class AgentLogger:
             "payload": payload
         }
         
+        # 환경변수에서 인증 키 로드 (관리자 키 또는 클라이언트 키, 따옴표 제거 필수)
+        api_key = (os.environ.get("ADMIN_API_KEY") or os.environ.get("CLIENT_API_KEY", "")).strip("\"'")
+
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(url, json=data)
+                resp = await client.post(
+                    url, 
+                    json=data,
+                    headers={"X-API-Key": api_key}
+                )
                 resp.raise_for_status()
         except Exception as e:
             logger.warning(f"[{self.agent_name}] 로그 전송 실패: {e}")

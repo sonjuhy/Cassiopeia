@@ -1,10 +1,16 @@
 # Communication Agent FastAPI 서버 (장기 실행 Socket Mode 리스너)
 # - FastAPI + uvicorn + slack_sdk Socket Mode 기반
 # - docker run 으로 에이전트 컨테이너를 트리거하므로 docker-cli 포함
-FROM python:3.12-alpine
+FROM python:3.12-slim
 
 # docker CLI 설치 (에이전트 컨테이너 실행용) + 빌드 도구
-RUN apk add --no-cache docker-cli gcc musl-dev libffi-dev
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl gcc \
+    && curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-24.0.9.tgz -o docker.tgz \
+    && tar xzvf docker.tgz \
+    && mv docker/docker /usr/local/bin/ \
+    && rm -rf docker docker.tgz \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

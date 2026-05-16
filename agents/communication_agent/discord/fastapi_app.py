@@ -100,6 +100,10 @@ class DiscordBot(discord.Client):
         if not text:
             return
 
+        if text.startswith("/설정") or text.startswith("/setup"):
+            await self._comm_agent.handle_setup_command(message)
+            return
+
         from ..models import DiscordEvent
 
         event = DiscordEvent(

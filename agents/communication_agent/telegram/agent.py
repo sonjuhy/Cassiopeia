@@ -9,6 +9,8 @@ Telegram 소통 에이전트 (TelegramCommAgent)
 from __future__ import annotations
 
 import asyncio
+import json
+import httpx
 import logging
 import os
 import uuid
@@ -86,6 +88,76 @@ class TelegramCommAgent:
 
     def set_bot(self, bot: Bot) -> None:
         self._bot = bot
+
+    async def handle_setup_command(self, message: Message) -> None:
+        """'/setup' 명령어 처리: 에이전트 선택 인라인 키보드를 보냅니다."""
+        agents = ["schedule-agent", "research-agent", "archive_agent"]
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(agent, callback_data=f"setup_agent:{agent}")] for agent in agents
+        ])
+        await message.reply_text("⚙️ <b>에이전트 설정 위저드</b>\n설정(API 키 등록 등)이 필요한 에이전트를 선택하세요.", reply_markup=keyboard, parse_mode=ParseMode.HTML)
+
+    async def handle_setup_callback(self, query: Any, agent_name: str) -> None:
+        """에이전트 선택 시 JSON 입력을 요청하는 메시지(ForceReply 트리거)를 보냅니다."""
+        agents_guide = {
+            "schedule-agent": "GOOGLE_SERVICE_ACCOUNT_JSON, GOOGLE_CALENDAR_ID",
+            "research-agent": "GEMINI_API_KEY, PERPLEXITY_API_KEY",
+            "archive_agent": "NOTION_TOKEN, NOTION_DB_ID"
+        }
+        guide = agents_guide.get(agent_name, "필요한 설정을 입력하세요.")
+        from telegram import ForceReply
+        
+        await query.message.reply_text(
+            f"*{agent_name}* 키 설정을 위한 JSON 데이터를 입력해주세요.\n"
+            f"가이드: `{guide}`\n\n"
+            f"이 메시지에 '답장(Reply)' 형태로 JSON을 전송해주세요.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=ForceReply(selective=True)
+        )
+
+    async def handle_setup_reply(self, message: Message) -> None:
+        """사용자가 보낸 JSON 데이터를 파싱하여 Admin API로 전송합니다."""
+        import httpx
+        raw_text = message.text or ""
+        
+        # 'archive_agent 키 설정을 위한 JSON 데이터를 입력해주세요.' 에서 추출
+        reply_text = message.reply_to_message.text or ""
+        agent_name = ""
+        import re
+        match = re.search(r"\*(.*?)\* 키 설정", reply_text)
+        if match:
+            agent_name = match.group(1)
+        elif "키 설정을 위한" in reply_text:
+            agent_name = reply_text.split("키 설정을")[0].strip("* ")
+        
+        if not agent_name:
+            await message.reply_text("❌ 에이전트 이름을 파악할 수 없습니다.")
+            return
+
+        try:
+            secrets = json.loads(raw_text)
+            if not isinstance(secrets, dict):
+                raise ValueError("JSON 객체(dict) 형식이어야 합니다.")
+        except Exception as e:
+            await message.reply_text(f"❌ 유효한 JSON이 아닙니다: {e}")
+            return
+
+        cassiopeia_url = os.environ.get("CASSIOPEIA_URL", "http://cassiopeia-agent:8001").strip("/")
+        admin_key = os.environ.get("ADMIN_API_KEY", "").strip('"\'')
+        
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{cassiopeia_url}/admin/secrets/{agent_name}",
+                    json=secrets,
+                    headers={"X-API-Key": admin_key}
+                )
+                resp.raise_for_status()
+            
+            await message.reply_text(f"✅ <b>{agent_name}</b> 설정이 성공적으로 저장되었습니다.", parse_mode=ParseMode.HTML)
+        except Exception as e:
+            logger.error("[setup] 시크릿 저장 실패: %s", e)
+            await message.reply_text(f"❌ <b>{agent_name}</b> 설정 저장 중 오류가 발생했습니다: {e}", parse_mode=ParseMode.HTML)
 
     async def _ensure_cassiopeia(self) -> CassiopeiaClient:
         if self._cassiopeia is None:
@@ -206,9 +278,16 @@ class TelegramCommAgent:
 
     async def _heartbeat_loop(self) -> None:
         from datetime import datetime, timezone
+        
+        nlu_desc = (
+            "- telegram_communication_agent: 텔레그램 사용자와의 대화, 추가 질문(ask_clarification), "
+            "또는 명확하지 않은 요청에 대해 답변할 때 사용합니다. (actions: ask_clarification, send_message)"
+        )
+
         while True:
             try:
                 if self._redis:
+                    # 1. 헬스 상태 업데이트
                     await self._redis.update_agent_health(
                         self.agent_name,
                         {
@@ -217,11 +296,25 @@ class TelegramCommAgent:
                             "version": "1.0.0",
                         },
                     )
+                    
+                    # 2. 중앙 레지스트리에 능력치 등록 (동적 라우팅용)
+                    await self._redis.update_agent_registry(
+                        self.agent_name,
+                        {
+                            "name": self.agent_name,
+                            "lifecycle_type": "long_running",
+                            "nlu_description": nlu_desc,
+                            "capabilities": ["message", "telegram"],
+                            "registered_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+                    
+                    logger.debug("[TelegramAgent] 하트비트/레지스트리 갱신 완료 (agent=%s)", self.agent_name)
                 await asyncio.sleep(15)
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("[TelegramAgent] 하트비트 전송 실패: %s", e)
+                logger.error("[TelegramAgent] 하트비트 갱신 실패: %s", e)
                 await asyncio.sleep(5)
 
     async def _handle_system_result(self, result: dict[str, Any]) -> None:

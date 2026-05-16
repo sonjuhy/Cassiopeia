@@ -12,8 +12,8 @@ from fastapi.security.api_key import APIKeyHeader
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 # 환경변수에서 키 로드 — 미설정 시 서비스 시작 불가
-ADMIN_API_KEY: str = os.environ.get("ADMIN_API_KEY", "")
-CLIENT_API_KEY: str = os.environ.get("CLIENT_API_KEY", "")
+ADMIN_API_KEY: str = os.environ.get("ADMIN_API_KEY", "").strip('"\'')
+CLIENT_API_KEY: str = os.environ.get("CLIENT_API_KEY", "").strip('"\'')
 
 if not ADMIN_API_KEY:
     raise RuntimeError(
