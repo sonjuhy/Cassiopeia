@@ -11,7 +11,7 @@ pydantic>=2.7.0
 redis[hiredis]>=5.0.0
 
 # Agent messaging SDK
-cassiopeia-sdk>=0.1.0
+cassiopeia-sdk>=0.3.0
 
 # Google Calendar API
 google-api-python-client>=2.125.0

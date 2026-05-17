@@ -15,7 +15,7 @@ httpx>=0.27.0
 beautifulsoup4>=4.12.0
 
 # Agent messaging SDK
-cassiopeia-sdk>=0.1.0
+cassiopeia-sdk>=0.3.0
 
 # LLM (for summarizing results)
 google-genai>=1.0.0

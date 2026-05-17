@@ -17,5 +17,8 @@ uvicorn[standard]>=0.30.0
 # Pydantic v2 (FastAPI 요청 바디 검증)
 pydantic>=2.7.0
 
+# Cassiopeia SDK
+cassiopeia-sdk>=0.3.0
+
 # 환경변수 로딩
 python-dotenv>=1.0.0
