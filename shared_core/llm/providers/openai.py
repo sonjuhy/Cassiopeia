@@ -33,9 +33,14 @@ class OpenAIProvider:
     ) -> None:
         self._base_url = (
             base_url or os.environ.get("OPENAI_API_BASE", _DEFAULT_BASE_URL)
-        ).rstrip("/")
-        self._model = model or os.environ.get("OPENAI_API_MODEL", _DEFAULT_MODEL)
-        self._api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        ).strip("\"'").rstrip("/")
+        
+        raw_model = model or os.environ.get("OPENAI_API_MODEL", _DEFAULT_MODEL)
+        self._model = raw_model.strip("\"'")
+        
+        raw_api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        self._api_key = raw_api_key.strip("\"'")
+        
         self._endpoint = f"{self._base_url}/chat/completions"
 
     def _headers(self) -> dict[str, str]:

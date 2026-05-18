@@ -37,51 +37,6 @@ class PlanStep(BaseModel):
     metadata: PlanStepMetadata
 
 
-class SingleNLUResult(BaseModel):
-    """단일 에이전트 작업 NLU 결과"""
-    type: Literal["single"]
-    intent: str
-    selected_agent: str
-    action: str
-    params: dict[str, Any]
-    metadata: NLUMetadata
-
-
-class MultiStepNLUResult(BaseModel):
-    """복합 작업 NLU 결과"""
-    type: Literal["multi_step"]
-    intent: str
-    plan: list[PlanStep]
-    metadata: NLUMetadata
-
-
-class ClarificationParams(BaseModel):
-    """추가 질문 파라미터"""
-    question: str
-    options: list[str] = Field(default_factory=list)
-
-
-class ClarificationNLUResult(BaseModel):
-    """추가 질문 NLU 결과 (confidence < 0.7 또는 정보 부족)"""
-    type: Literal["clarification"]
-    intent: str
-    selected_agent: Literal["communication_agent"]
-    action: Literal["ask_clarification"]
-    params: ClarificationParams
-    metadata: NLUMetadata
-
-
-class DirectResponseNLUResult(BaseModel):
-    """단순 인사, 일상 대화 등 하위 에이전트 호출 없이 직접 답변하는 결과"""
-    type: Literal["direct_response"]
-    intent: str
-    params: dict[str, str]  # {"answer": "답변 내용"}
-    metadata: NLUMetadata
-
-
-# NLU 결과 타입 유니온
-NLUResult = SingleNLUResult | MultiStepNLUResult | ClarificationNLUResult | DirectResponseNLUResult
-
 # 신뢰도 임계값 (환경변수 NLU_CONFIDENCE_THRESHOLD로 재정의 가능)
 NLU_CONFIDENCE_THRESHOLD: float = float(os.environ.get("NLU_CONFIDENCE_THRESHOLD", "0.7"))
 
@@ -100,7 +55,7 @@ class CassiopeiaTask(TypedDict):
     session_id: str        # NLU 컨텍스트 주입용 (format: user_id:channel_id)
     requester: TaskRequester
     content: str
-    source: str            # 항상 "slack"
+    source: str            # 소스 플랫폼 식별자 (slack | discord | telegram | ...)
     thread_ts: str | None
 
 
@@ -120,6 +75,8 @@ class DispatchMessage(TypedDict):
     requester: TaskRequester
     agent: str
     action: str
+    content: str           # 사용자의 원본 요청 텍스트
+    context: list[dict[str, Any]] # 이전 대화 이력 (LLM 컨텍스트 형식)
     params: dict[str, Any]
     retry_info: RetryInfo
     priority: str          # LOW | MEDIUM | HIGH | CRITICAL

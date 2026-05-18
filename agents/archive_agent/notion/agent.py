@@ -19,8 +19,9 @@ from ..models import (
     RawPayload,
 )
 from .notion_parser import parse_notion_task
-from .task_analyzer import ClaudeAPITaskAnalyzer, TaskAnalyzerProtocol
 from shared_core.agent_logger import AgentLogger
+from shared_core.storage.sqlite_manager import SqliteStorageManager
+from cassiopeia_sdk.brain import AgentBrain, AgentBrainConfig
 
 NOTION_API_BASE = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
@@ -31,13 +32,11 @@ UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-
 def is_uuid(val: str) -> bool:
     """문자열이 유효한 UUID 형식인지 확인합니다."""
     return bool(UUID_PATTERN.match(val))
-from shared_core.agent_logger import AgentLogger
-from shared_core.storage.sqlite_manager import SqliteStorageManager
 
 class ArchiveAgent:
     agent_name: str = "archive_agent"
 
-    def __init__(self, task_analyzer: TaskAnalyzerProtocol | None = None, storage = None) -> None:
+    def __init__(self, storage = None) -> None:
         self._token: str = os.environ.get("NOTION_TOKEN", "")
         self._database_id: str = os.environ.get("NOTION_DATABASE_ID", "")
         self._headers: dict[str, str] = {
@@ -45,9 +44,36 @@ class ArchiveAgent:
             "Notion-Version": NOTION_VERSION,
             "Content-Type": "application/json",
         }
-        self.task_analyzer = task_analyzer or ClaudeAPITaskAnalyzer()
+        
+        # SDK AgentBrain 초기화
+        # 기획서 작성 및 태스크 분석용 브레인
+        self.brain = AgentBrain(
+            agent_name=f"{self.agent_name}_brain",
+            capabilities="""당신은 소프트웨어 기획 전문가입니다. 
+주어진 태스크를 분석하여 목표, 과정, 기능을 포함하는 상세한 마크다운 기획 문서를 작성합니다.""",
+            backend="gateway",
+            llm_caller=self._direct_llm_caller,
+            config=AgentBrainConfig(max_retries=2)
+        )
+            
         self.logger = AgentLogger(self.agent_name)
         self._storage = storage or SqliteStorageManager()
+
+    async def _direct_llm_caller(self, messages: list[dict], max_tokens: int = 500, temperature: float = 0.7, model: str | None = None, **kwargs) -> Any:
+        from shared_core.llm.factory import build_llm_provider_from_config
+        from shared_core.llm.llm_config import LLMConfig
+        from cassiopeia_sdk.brain._models import LLMResponse
+        
+        system_msgs = [m["content"] for m in messages if m["role"] == "system"]
+        system_instruction = "\n".join(system_msgs) if system_msgs else None
+        
+        user_msgs = [m["content"] for m in messages if m["role"] != "system"]
+        prompt = "\n".join(user_msgs)
+        
+        llm = build_llm_provider_from_config(LLMConfig(backend="gemini", model=model))
+        response_text, usage = await llm.generate_response(prompt=prompt, system_instruction=system_instruction)
+        
+        return LLMResponse(task_id="direct", status="completed", content=response_text, usage={"total_tokens": usage.total_tokens} if usage else {})
 
     # ── 기본 도구 (Notion API Wrappers) ──────────────────────────────────────────
 
@@ -121,6 +147,20 @@ class ArchiveAgent:
                 "raw_data": None, "content": None, "summary": "", "metadata": {},
             }
 
+            # [Discovery Actions] 검색/조회용 액션은 ID 보정 생략
+            if action == "list_databases":
+                db_list = await self.search_notion(filter_obj={"property": "object", "value": "database"})
+                res_data["raw_data"] = {"databases": db_list}
+                res_data["summary"] = f"연결된 {len(db_list)}개의 데이터베이스 목록을 확인했습니다."
+                return await self._finalize_result(task_id, action, res_data)
+
+            elif action == "search_objects":
+                query = params.get("query") or user_text
+                search_results = await self.search_notion(query=query)
+                res_data["raw_data"] = {"search_results": search_results}
+                res_data["summary"] = f"'{query}' 검색 결과 {len(search_results)}개의 항목을 발견했습니다."
+                return await self._finalize_result(task_id, action, res_data)
+
             # [ID 유효성 검사 및 보정]
             target_id = params.get("page_id") or params.get("database_id")
             
@@ -136,7 +176,6 @@ class ArchiveAgent:
                     await self.logger.log_action("fallback", f"제목 '{params.get('page_id') or params.get('database_id')}'를 ID '{target_id}'로 변환", task_id=task_id)
                 else:
                     # 검색 결과가 없는데 '저장' 요청인 경우 생성을 고려
-                    # user_text(content) 또는 params 내부의 텍스트 확인
                     combined_text = (user_text + " " + str(params.get("content", "")) + " " + str(params.get("text", ""))).lower()
                     if "저장" in combined_text or "생성" in combined_text or "write" in combined_text or action == "create_page":
                         action = "create_page"
@@ -147,22 +186,29 @@ class ArchiveAgent:
             # 2. 특정 ID가 아예 없는 경우 -> 사용자 질문으로 검색 시도
             if not params.get("page_id") and not params.get("database_id"):
                 search_q = params.get("query") or user_text
-                await self.logger.log_action("reasoning", f"ID 누락으로 검색 시도: {search_q}", task_id=task_id)
-                search_res = await self.search_notion(query=search_q)
-                
-                if search_res:
-                    best_match = search_res[0]
-                    target_id = best_match["id"]
-                    obj_type = best_match["object"]
-                    params["page_id" if obj_type == "page" else "database_id"] = target_id
-                    await self.logger.log_action("fallback", f"검색 결과 '{obj_type}' 발견 (ID: {target_id})", task_id=task_id)
+                if search_q:
+                    await self.logger.log_action("reasoning", f"ID 누락으로 검색 시도: {search_q}", task_id=task_id)
+                    search_res = await self.search_notion(query=search_q)
+                    
+                    if search_res:
+                        best_match = search_res[0]
+                        target_id = best_match["id"]
+                        obj_type = best_match["object"]
+                        params["page_id" if obj_type == "page" else "database_id"] = target_id
+                        await self.logger.log_action("fallback", f"검색 결과 '{obj_type}' 발견 (ID: {target_id})", task_id=task_id)
+                    else:
+                        if self._database_id:
+                            params["database_id"] = self._database_id
+                            if action not in ["create_page"]: action = "query_database"
+                            await self.logger.log_action("fallback", "검색 결과 없음, 기본 DB 사용", task_id=task_id)
+                        else:
+                            raise ValueError("조회할 대상(ID)을 찾을 수 없으며 검색 결과도 없습니다.")
                 else:
+                    # 검색어도 없고 ID도 없으면 기본 DB 사용
                     if self._database_id:
                         params["database_id"] = self._database_id
-                        if action not in ["create_page"]: action = "query_database"
-                        await self.logger.log_action("fallback", "검색 결과 없음, 기본 DB 사용", task_id=task_id)
                     else:
-                        raise ValueError("조회할 대상(ID)을 찾을 수 없으며 검색 결과도 없습니다.")
+                        raise ValueError("조회할 대상(ID)이나 검색어가 없습니다.")
 
             # [실행 및 자율 판단 2] 실행 중 오류 발생 시 자가 치유
             if action == "create_page":
@@ -174,51 +220,81 @@ class ArchiveAgent:
                 res_data["action"] = "create_page"
 
             elif action == "get_page":
+                # 만약 database_id만 있고 page_id가 없다면 target_id로 사용
                 target_id = params.get("page_id") or params.get("database_id")
                 try:
                     data = await self.fetch_page(target_id)
                     res_data["raw_data"] = data
                     res_data["summary"] = "페이지 상세 정보를 가져왔습니다."
                 except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 400: # DB를 페이지 API로 호출한 경우
+                    # 400 에러는 주로 페이지 ID 자리에 데이터베이스 ID가 들어갔을 때 발생
+                    if e.response.status_code == 400:
                         await self.logger.log_action("self_healing", "페이지 조회 실패 -> DB 쿼리로 자동 전환", task_id=task_id)
                         db_res = await self.query_database(target_id)
                         res_data["raw_data"] = {"results": db_res}
                         res_data["action"] = "query_database"
                         res_data["metadata"]["db_id"] = target_id
                         res_data["summary"] = "데이터베이스의 모든 항목을 조회했습니다."
+                    elif e.response.status_code == 404:
+                        # 404 에러는 ID가 아예 존재하지 않는 경우 (할루시네이션 등)
+                        await self.logger.log_action("self_healing", f"ID '{target_id}'를 찾을 수 없음 -> 이름으로 검색 시도", task_id=task_id)
+                        # ID를 비우고 검색 로직을 다시 타게 유도 (재귀 호출 대신 파라미터 초기화 후 재시도 가능하나 여기선 직접 검색)
+                        search_q = params.get("query") or params.get("title") or user_text
+                        search_res = await self.search_notion(query=search_q)
+                        if search_res:
+                            best_match = search_res[0]
+                            new_id = best_match["id"]
+                            data = await self.fetch_page(new_id) # 새로 찾은 ID로 재시도
+                            res_data["raw_data"] = data
+                            res_data["summary"] = f"기존 ID를 찾을 수 없어 '{search_q}' 검색 결과로 정보를 가져왔습니다."
+                        else: raise e
                     else: raise e
 
             elif action == "query_database":
+                # 데이터베이스 쿼리 요청이지만, 검색 결과가 페이지인 경우 대응
                 target_id = params.get("database_id") or params.get("page_id") or self._database_id
-                db_res = await self.query_database(target_id)
-                res_data["raw_data"] = {"results": db_res}
-                res_data["metadata"]["db_id"] = target_id
-                res_data["summary"] = f"데이터베이스에서 {len(db_res)}개의 항목을 가져왔습니다."
+                
+                # 정렬 및 필터링 처리 (사용자 요청: 오래된 순 등)
+                query_filter = {}
+                if "sorts" in params:
+                    query_filter["sorts"] = params["sorts"]
+                elif "오래된" in user_text:
+                    query_filter["sorts"] = [{"timestamp": "created_time", "direction": "ascending"}]
+                elif "최신" in user_text:
+                    query_filter["sorts"] = [{"timestamp": "created_time", "direction": "descending"}]
+                
+                # 개수 제한
+                page_size = params.get("page_size") or 100
+                if "3개" in user_text: page_size = 3
+                
+                try:
+                    db_res = await self.query_database(target_id, query_filter=query_filter)
+                    # 결과 개수 제한 적용
+                    db_res = db_res[:page_size]
+                    res_data["raw_data"] = {"results": db_res}
+                    res_data["metadata"]["db_id"] = target_id
+                    res_data["summary"] = f"데이터베이스에서 {len(db_res)}개의 항목을 가져왔습니다."
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 400:
+                        await self.logger.log_action("self_healing", "DB 쿼리 실패 -> 페이지 조회로 자동 전환", task_id=task_id)
+                        data = await self.fetch_page(target_id)
+                        res_data["raw_data"] = data
+                        res_data["action"] = "get_page"
+                        res_data["summary"] = f"'{target_id}'는 페이지로 확인되어 상세 정보를 가져왔습니다."
+                    elif e.response.status_code == 404:
+                        await self.logger.log_action("self_healing", f"DB ID '{target_id}'를 찾을 수 없음 -> 이름으로 검색 시도", task_id=task_id)
+                        search_q = params.get("query") or params.get("title") or user_text
+                        search_res = await self.search_notion(query=search_q, filter_obj={"property": "object", "value": "database"})
+                        if search_res:
+                            new_id = search_res[0]["id"]
+                            db_res = await self.query_database(new_id, query_filter=query_filter)
+                            res_data["raw_data"] = {"results": db_res[:page_size]}
+                            res_data["metadata"]["db_id"] = new_id
+                            res_data["summary"] = f"기존 ID를 찾을 수 없어 '{search_q}' 검색 결과({new_id})에서 데이터를 가져왔습니다."
+                        else: raise e
+                    else: raise e
 
-            elif action == "list_databases":
-                db_list = await self.search_notion(filter_obj={"property": "object", "value": "database"})
-                res_data["raw_data"] = {"databases": db_list}
-                res_data["summary"] = f"연결된 {len(db_list)}개의 데이터베이스 목록을 확인했습니다."
-
-            # [지능형 요약] 결과 데이터를 인간이 읽기 좋은 마크다운으로 변환
-            res_data["content"] = self._generate_human_friendly_content(res_data)
-
-            # 하이브리드 아키텍처: 대용량 메타데이터(JSON) 분산 저장
-            ref_id = None
-            if res_data["raw_data"]:
-                ref_id = await self._storage.save_data(
-                    data=res_data["raw_data"],
-                    metadata={"action": action, "task_id": task_id, "source": "notion"}
-                )
-            
-            res_data["reference_id"] = ref_id
-            res_data["payload_summary"] = res_data["summary"]
-            
-            # 카시오페아 큐 오버헤드를 줄이기 위해 raw_data 삭제
-            res_data.pop("raw_data", None)
-
-            return {"task_id": task_id, "status": "COMPLETED", "result_data": res_data, "error": None, "usage_stats": {}}
+            return await self._finalize_result(task_id, action, res_data)
 
         except Exception as exc:
             await self.logger.log_action("error", str(exc), task_id=task_id)
@@ -226,6 +302,27 @@ class ArchiveAgent:
                 "task_id": task_id, "status": "FAILED", "result_data": {},
                 "error": {"code": "ARCHIVE_ERROR", "message": str(exc), "traceback": traceback.format_exc()}
             }
+
+    async def _finalize_result(self, task_id: str, action: str, res_data: ArchiveTaskResult) -> dict[str, Any]:
+        """결과 데이터를 정리하고 저장소에 보관한 뒤 최종 응답 형식을 반환합니다."""
+        # [지능형 요약] 결과 데이터를 인간이 읽기 좋은 마크다운으로 변환
+        res_data["content"] = self._generate_human_friendly_content(res_data)
+
+        # 하이브리드 아키텍처: 대용량 메타데이터(JSON) 분산 저장
+        ref_id = None
+        if res_data["raw_data"]:
+            ref_id = await self._storage.save_data(
+                data=res_data["raw_data"],
+                metadata={"action": action, "task_id": task_id, "source": "notion"}
+            )
+        
+        res_data["reference_id"] = ref_id
+        res_data["payload_summary"] = res_data["summary"]
+        
+        # 카시오페아 큐 오버헤드를 줄이기 위해 raw_data 삭제
+        res_data.pop("raw_data", None)
+
+        return {"task_id": task_id, "status": "COMPLETED", "result_data": res_data, "error": None, "usage_stats": {}}
 
     def _get_property_value(self, p_val: dict[str, Any]) -> str:
         """노션 속성 객체에서 실제 값을 문자열로 추출합니다."""
@@ -306,6 +403,7 @@ class ArchiveAgent:
         # 2. 데이터베이스 목록 조회
         elif action == "list_databases":
             databases = raw.get("databases", [])
+            if not databases: return "연결된 데이터베이스가 없습니다."
             lines = ["### 📂 연결된 데이터베이스 목록", ""]
             for db in databases:
                 title_list = db.get("title", [])
@@ -313,7 +411,28 @@ class ArchiveAgent:
                 lines.append(f"- **{title}** (ID: `{db.get('id')}`)")
             return "\n".join(lines)
 
-        # 3. 단일 페이지 상세 조회
+        # 3. 통합 검색 결과
+        elif action == "search_objects":
+            items = raw.get("search_results", [])
+            if not items: return "검색 결과가 없습니다."
+            lines = ["### 🔍 노션 통합 검색 결과", ""]
+            for item in items:
+                obj_type = "📄 페이지" if item["object"] == "page" else "📊 DB"
+                # 제목 추출
+                title = "제목 없음"
+                if item["object"] == "page":
+                    props = item.get("properties", {})
+                    for p in props.values():
+                        if p.get("type") == "title":
+                            title = self._get_property_value(p)
+                else:
+                    t_list = item.get("title") or []
+                    title = t_list[0].get("plain_text", "제목 없음") if t_list else "제목 없음"
+                
+                lines.append(f"- {obj_type}: **{title}** ([이동]({item.get('url', '#')}))")
+            return "\n".join(lines)
+
+        # 4. 단일 페이지 상세 조회
         elif action == "get_page":
             props = raw.get("properties", {})
             page_id = raw.get("id", "알 수 없음")
@@ -324,6 +443,7 @@ class ArchiveAgent:
             return "\n".join(lines)
         
         return f"```json\n{json.dumps(raw, indent=2, ensure_ascii=False)[:1000]}\n```"
+
 
     async def run(self) -> None:
         """Legacy 실행용"""

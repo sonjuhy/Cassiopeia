@@ -30,7 +30,9 @@ async def verify_sandbox_key(x_sandbox_api_key: str = Header(None)):
         raise HTTPException(status_code=401, detail="Missing API Key")
 
     # 1. 정적 키 확인 (환경변수)
-    expected_key = os.environ.get("SANDBOX_API_KEY")
+    raw_key = os.environ.get("SANDBOX_API_KEY")
+    expected_key = raw_key.strip("\"'") if raw_key else None
+    
     if expected_key and x_sandbox_api_key == expected_key:
         return
     

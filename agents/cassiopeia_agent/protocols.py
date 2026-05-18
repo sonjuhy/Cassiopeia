@@ -7,31 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from .models import AgentResult, NLUResult, CassiopeiaTask
-
-
-class NLUEngineProtocol(Protocol):
-    """자연어 의도 파악 엔진 인터페이스"""
-
-    async def analyze(
-        self,
-        user_text: str,
-        session_id: str,
-        context: list[dict[str, Any]],
-    ) -> NLUResult:
-        """
-        사용자 텍스트를 분석하여 NLU 결과를 반환합니다.
-
-        Args:
-            user_text: 사용자 입력 텍스트.
-            session_id: 세션 식별자.
-            context: 이전 대화 컨텍스트 (LLM 형식).
-
-        Returns:
-            NLUResult: SingleNLUResult | MultiStepNLUResult | ClarificationNLUResult
-        """
-        ...
-
+from .models import AgentResult, CassiopeiaTask
 
 class StateManagerProtocol(Protocol):
     """세션 상태 및 대화 이력 관리 인터페이스"""

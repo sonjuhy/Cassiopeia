@@ -53,7 +53,7 @@ class SandboxClient:
         http_timeout: float = 330.0,
     ) -> None:
         self._url = sandbox_url.rstrip("/")
-        self._api_key = api_key
+        self._api_key = api_key.strip("\"'") if api_key else None
         self._http_timeout = http_timeout
 
     async def execute(

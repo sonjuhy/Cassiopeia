@@ -34,21 +34,6 @@ def _normalize_agent_name(agent_name: str) -> str:
 def load_llm_config_for_agent(agent_name: str) -> LLMConfig:
     """
     에이전트별 환경변수에서 LLMConfig를 로드합니다.
-
-    우선순위:
-    1. {AGENT_NAME}_LLM_BACKEND  (에이전트 전용, 예: ARCHIVE_AGENT_LLM_BACKEND)
-    2. LLM_BACKEND               (전역 설정)
-    3. "gemini"                  (기본값)
-
-    모델/API키:
-    - {AGENT_NAME}_LLM_MODEL
-    - {AGENT_NAME}_LLM_API_KEY
-
-    Args:
-        agent_name: 에이전트 식별자 (예: "archive_agent", "research-agent").
-
-    Returns:
-        해석된 LLMConfig 인스턴스.
     """
     prefix = _normalize_agent_name(agent_name)
 
@@ -57,10 +42,16 @@ def load_llm_config_for_agent(agent_name: str) -> LLMConfig:
         os.environ.get(backend_key)
         or os.environ.get("LLM_BACKEND", "gemini")
     )
-    backend = raw_backend.lower()
+    # 따옴표 제거 및 소문자 정규화
+    backend = raw_backend.strip("\"'").lower()
 
     model = os.environ.get(f"{prefix}_LLM_MODEL") or None
+    if model:
+        model = model.strip("\"'")
+        
     api_key = os.environ.get(f"{prefix}_LLM_API_KEY") or None
+    if api_key:
+        api_key = api_key.strip("\"'")
 
     return LLMConfig(backend=backend, model=model, api_key=api_key)
 
@@ -92,8 +83,17 @@ def llm_config_from_dispatch(dispatch_msg: dict) -> LLMConfig | None:
     if not backend:
         return None
 
+    backend = str(backend).strip("\"'").lower()
+    model = raw.get("model")
+    if model:
+        model = str(model).strip("\"'")
+        
+    api_key = raw.get("api_key")
+    if api_key:
+        api_key = str(api_key).strip("\"'")
+
     return LLMConfig(
-        backend=backend.lower(),
-        model=raw.get("model") or None,
-        api_key=raw.get("api_key") or None,
+        backend=backend,
+        model=model or None,
+        api_key=api_key or None,
     )

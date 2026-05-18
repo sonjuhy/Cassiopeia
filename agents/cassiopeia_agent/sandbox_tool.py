@@ -31,7 +31,8 @@ class SandboxTool:
         self._mode = _detect_runtime()
 
         self._url = os.environ.get("SANDBOX_URL", "http://sandbox_agent:8003")
-        self._api_key = os.environ.get("SANDBOX_API_KEY")
+        raw_key = os.environ.get("SANDBOX_API_KEY")
+        self._api_key = raw_key.strip("\"'") if raw_key else None
 
         self._http_client: SandboxClient | None = None
         if self._mode == "remote":

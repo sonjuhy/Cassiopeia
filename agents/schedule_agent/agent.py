@@ -15,6 +15,8 @@ from typing import Any
 import httpx
 import redis.asyncio as aioredis
 from cassiopeia_sdk.client import AgentMessage as SdkAgentMessage, CassiopeiaClient
+from cassiopeia_sdk.brain import AgentBrain, AgentBrainConfig
+from cassiopeia_sdk.tools import Tool
 
 from shared_core.calendar.interfaces import CalendarEvent, CalendarEventId
 
@@ -25,6 +27,7 @@ logger = logging.getLogger("schedule_agent.agent")
 
 _HEARTBEAT_INTERVAL: int = int(os.environ.get("HEARTBEAT_INTERVAL", "15"))
 _HTTP_REPORT_TIMEOUT: float = float(os.environ.get("HTTP_REPORT_TIMEOUT", "10.0"))
+_DISPATCH_TIMEOUT: float = float(os.environ.get("DISPATCH_TIMEOUT", "60.0"))
 _DLQ_KEY = "cassiopeia:dlq"
 
 
@@ -48,14 +51,78 @@ class ScheduleAgent:
             service_account_key_json=self._config.service_account_key_json,
             scopes=self._config.scopes,
         )
+        
+        # SDK AgentBrain 초기화
+        self.brain = AgentBrain(
+            agent_name=self.agent_name,
+            capabilities="""당신은 개인 비서 및 일정 관리 전문가입니다. 
+구글 캘린더를 사용하여 일정을 조회, 추가, 수정, 삭제합니다. 
+사용자의 자연어 요청에서 정확한 시간(ISO 포맷)과 이벤트 내용을 추출합니다.""",
+            backend="gateway",
+            llm_caller=self._direct_llm_caller,
+            config=AgentBrainConfig(max_retries=2)
+        )
 
-    async def process_message(self, action: str, payload: dict) -> dict[str, Any]:
-        match action:
-            case "list_schedules": return await self._handle_list(payload)
-            case "add_schedule": return await self._handle_add(payload)
-            case "modify_schedule": return await self._handle_modify(payload)
-            case "remove_schedule": return await self._handle_remove(payload)
-            case _: return {"status": "error", "message": f"알 수 없는 action: {action}"}
+    async def _direct_llm_caller(self, messages: list[dict], max_tokens: int = 500, temperature: float = 0.7, model: str | None = None, **kwargs) -> Any:
+        from shared_core.llm.factory import build_llm_provider_from_config
+        from shared_core.llm.llm_config import LLMConfig
+        from cassiopeia_sdk.brain._models import LLMResponse
+        
+        system_msgs = [m["content"] for m in messages if m["role"] == "system"]
+        system_instruction = "\n".join(system_msgs) if system_msgs else None
+        
+        user_msgs = [m["content"] for m in messages if m["role"] != "system"]
+        prompt = "\n".join(user_msgs)
+        
+        llm = build_llm_provider_from_config(LLMConfig(backend="gemini", model=model))
+        response_text, usage = await llm.generate_response(prompt=prompt, system_instruction=system_instruction)
+        
+        return LLMResponse(task_id="direct", status="completed", content=response_text, usage={"total_tokens": usage.total_tokens} if usage else {})
+
+    async def process_message(self, action: str, payload: dict, user_text: str = "", history: list = None) -> dict[str, Any]:
+        """AgentBrain을 통해 의도를 정제한 후 실제 작업을 수행합니다."""
+        
+        # 1. 사용 가능한 도구 정의
+        tools = [
+            Tool(name="list_schedules", description="지정된 기간의 일정을 조회합니다.", 
+                 parameters={"start_time": "조회 시작 시간 (ISO 포맷)", "end_time": "조회 종료 시간 (ISO 포맷)"}),
+            Tool(name="add_schedule", description="새로운 일정을 추가합니다.", 
+                 parameters={"event": {"summary": "제목", "start_time": "시작 시간", "end_time": "종료 시간", "description": "내용", "location": "장소"}}),
+            Tool(name="modify_schedule", description="기존 일정을 수정합니다.", 
+                 parameters={"event_id": "수정할 이벤트 ID", "event": "수정할 내용"}),
+            Tool(name="remove_schedule", description="일정을 삭제합니다.", 
+                 parameters={"event_id": "삭제할 이벤트 ID"})
+        ]
+
+        # 2. Brain을 통한 의도 정제
+        try:
+            decision = await self.brain.analyze_task(
+                user_request=user_text or str(payload),
+                tools=tools,
+                history=history or []
+            )
+
+            if decision.action == "ask_clarification":
+                return {"status": "error", "message": decision.suggested_reply or "추가 정보가 필요합니다."}
+
+            final_action = decision.action
+            final_params = decision.params
+
+            match final_action:
+                case "list_schedules": return await self._handle_list(final_params)
+                case "add_schedule": return await self._handle_add(final_params)
+                case "modify_schedule": return await self._handle_modify(final_params)
+                case "remove_schedule": return await self._handle_remove(final_params)
+                case _: return {"status": "error", "message": f"지원하지 않는 작업: {final_action}"}
+
+        except Exception as e:
+            logger.warning(f"[ScheduleAgent] Brain 분석 실패, 기존 action 기반 실행: {e}")
+            match action:
+                case "list_schedules": return await self._handle_list(payload)
+                case "add_schedule": return await self._handle_add(payload)
+                case "modify_schedule": return await self._handle_modify(payload)
+                case "remove_schedule": return await self._handle_remove(payload)
+                case _: return {"status": "error", "message": f"알 수 없는 action: {action}"}
 
     async def _handle_list(self, payload: dict) -> dict:
         try:
@@ -112,8 +179,12 @@ class ScheduleAgent:
         }
         url = f"{cassiopeia_url}/results"
         headers = {}
-        if self._config.cassiopeia_api_key:
-            headers["X-API-Key"] = self._config.cassiopeia_api_key
+        
+        # 환경변수 또는 설정에서 인증 키 로드 (따옴표 제거 필수)
+        api_key = self._config.cassiopeia_api_key or os.environ.get("ADMIN_API_KEY") or os.environ.get("CLIENT_API_KEY", "")
+        api_key = api_key.strip("\"'")
+        if api_key:
+            headers["X-API-Key"] = api_key
 
         for attempt in range(3):
             try:
@@ -175,7 +246,20 @@ class ScheduleAgent:
                     scopes=self._config.scopes,
                 )
 
-            result = await self.process_message(action, params)
+            # SDK v0.3.0 리팩토링: content와 history를 함께 전달하여 Brain 분석 유도
+            try:
+                result = await asyncio.wait_for(
+                    self.process_message(
+                        action=action, 
+                        payload=params, 
+                        user_text=msg.payload.get("content", ""), 
+                        history=msg.payload.get("context", [])
+                    ),
+                    timeout=_DISPATCH_TIMEOUT
+                )
+            except (asyncio.TimeoutError, TimeoutError):
+                logger.error("[ScheduleAgent] 태스크 처리 시간 초과 task_id=%s", task_id)
+                result = {"status": "error", "message": f"태스크 처리가 시간 초과되었습니다 ({_DISPATCH_TIMEOUT}초)."}
 
             if result.get("status") == "error":
                 msg_text = result.get("message", "실행 오류")
@@ -237,15 +321,31 @@ class ScheduleAgent:
         cassiopeia = CassiopeiaClient(agent_id=self.agent_name, redis_url=redis_url)
         await cassiopeia.connect()
 
+        nlu_desc = (
+            "- schedule-agent: 구글 캘린더(Google Calendar)의 전체 일정, 미팅, 약속 등을 조회, 추가, 수정, 삭제하는 일정 관리 전용 에이전트입니다. "
+            "'오늘 일정 알려줘' 등의 요청을 처리합니다. (actions: list_schedules, add_schedule, modify_schedule, remove_schedule)"
+        )
+
         async def heartbeat_loop():
             while True:
                 try:
+                    # 1. 헬스 상태 업데이트
                     await redis.hset(health_key, mapping={
                         "status": "IDLE",
                         "last_heartbeat": datetime.now(timezone.utc).isoformat(),
                         "version": "1.0.0"
                     })
                     await redis.expire(health_key, 60)
+
+                    # 2. 중앙 레지스트리에 능력치 등록 (동적 라우팅용)
+                    await redis.hset("agents:registry", self.agent_name, json.dumps({
+                        "name": self.agent_name,
+                        "lifecycle_type": "long_running",
+                        "nlu_description": nlu_desc,
+                        "capabilities": ["calendar", "schedule"],
+                        "registered_at": datetime.now(timezone.utc).isoformat(),
+                    }, ensure_ascii=False))
+
                     await asyncio.sleep(_HEARTBEAT_INTERVAL)
                 except asyncio.CancelledError:
                     break

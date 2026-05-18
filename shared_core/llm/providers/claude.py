@@ -29,8 +29,13 @@ class ClaudeProvider:
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         if not self._api_key:
             raise ValueError("ANTHROPIC_API_KEY가 제공되지 않았거나 환경변수가 설정되지 않았습니다.")
+        
+        # 따옴표 제거
+        self._api_key = self._api_key.strip("\"'")
         self._client = anthropic.AsyncAnthropic(api_key=self._api_key)
-        self._model = model or os.environ.get("CLAUDE_MODEL", _DEFAULT_MODEL)
+        
+        raw_model = model or os.environ.get("CLAUDE_MODEL", _DEFAULT_MODEL)
+        self._model = raw_model.strip("\"'")
 
     async def generate_response(
         self,

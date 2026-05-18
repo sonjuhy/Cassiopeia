@@ -62,9 +62,10 @@ import redis.asyncio as aioredis
 import uvicorn
 from cassiopeia_sdk.client import CassiopeiaClient
 from dotenv import load_dotenv
-from fastapi import FastAPI, Depends, HTTPException, Query, Request, status
+from fastapi import FastAPI, Depends, File, Form, HTTPException, Query, Request, status, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 load_dotenv(encoding="utf-8")
@@ -114,7 +115,6 @@ from .error_messages import build_error_response, get_user_message
 from .rate_limiter import RateLimiter
 from .health_monitor import HealthMonitor
 from .manager import CassiopeiaManager
-from .nlu_engine import build_nlu_engine
 from .sandbox_tool import SandboxTool
 from .state_manager import StateManager
 from .agent_builder_handler import AgentBuilderHandler
@@ -122,6 +122,7 @@ from .registry import AgentRegistry
 from .marketplace_handler import MarketplaceHandler
 from .llm_gateway import LLMGatewayHandler
 from .llm_gateway.rate_limiter import TokenRateLimiter
+from .system_executor import SystemExecutor
 
 _OLLAMA_READY_TIMEOUT: int = int(os.environ.get("OLLAMA_READY_TIMEOUT", "120"))
 _LOCAL_LLM_MODEL: str = os.environ.get("LOCAL_LLM_MODEL", "llama3.2")
@@ -167,8 +168,9 @@ async def _startup(app: FastAPI):  # noqa: C901
     )
     logger.info("[Lifespan] Redis 연결 시도: %s", redis_url)
 
+    # 블로킹 작업(승인 대기 등)이 길어질 수 있으므로 socket_timeout을 충분히 크게 설정합니다.
     ctx.redis_client = aioredis.from_url(
-        redis_url, decode_responses=True, socket_timeout=60.0
+        redis_url, decode_responses=True, socket_timeout=310.0
     )
     try:
         await ctx.redis_client.ping()
@@ -212,50 +214,21 @@ async def _startup(app: FastAPI):  # noqa: C901
             raise _StartupError(f"Ollama 모델 준비 실패 ({_LOCAL_LLM_MODEL}): {exc}") from exc
         logger.info("[Lifespan] Ollama 준비 완료: %s", _LOCAL_LLM_MODEL)
 
-    try:
-        nlu_engine = build_nlu_engine()
-        logger.info("[Lifespan] NLU 엔진 생성 완료 (%s)", nlu_engine.__class__.__name__)
-        await nlu_engine.validate()
-    except _StartupError:
-        raise
-    except Exception as exc:
-        raise _StartupError(f"LLM API 연결 실패: {exc}") from exc
-
     ctx.manager = CassiopeiaManager(
         redis_client=ctx.redis_client,
-        nlu_engine=nlu_engine,
         state_manager=ctx.state_manager,
         health_monitor=ctx.health_monitor,
         sandbox_tool=ctx.sandbox_tool,
     )
 
-    # 기본 코어 에이전트 레지스트리 등록 (비즈니스 로직 에이전트 하드코딩 제거)
-    # (caps, lifecycle_type, nlu_description, permission_preset) — nlu_description 생략 시 ""
-    _AGENT_CONFIGS: dict[str, tuple] = {
-        "communication_agent": (
-            ["send_message", "ask_clarification"], 
-            "long_running", 
-            "- communication_agent: 사용자 질문 및 응답 (actions: ask_clarification)", 
-            "standard"
-        ),
-        # sandbox_agent: 카시오페아 내부 도구로 편입 — ephemeral 등록으로 헬스체크 없이 항상 가용
-        "sandbox_agent": (
-            ["execute_code", "run_code"],
-            "ephemeral",
-            (
-                "- sandbox_agent: Python/JavaScript/Bash 코드를 격리된 VM(Docker/Firecracker)에서 실행합니다. "
-                "params: {language: str, code: str, stdin?: str, timeout?: int, memory_mb?: int}"
-            ),
-            "minimal"
-        ),
-    }
-    for agent_name, config in _AGENT_CONFIGS.items():
-        caps, ltype = config[0], config[1]
-        nlu_desc = config[2] if len(config) > 2 else ""
-        preset = config[3] if len(config) > 3 else "standard"
-        await ctx.health_monitor.register_agent(
-            agent_name, caps, lifecycle_type=ltype, nlu_description=nlu_desc, permission_preset=preset
-        )
+    # 기본 시스템 에이전트만 최소한으로 등록 (나머지는 하위 에이전트가 기동 시 자동 등록)
+    await ctx.health_monitor.register_agent(
+        "cassiopeia_agent", 
+        ["get_agent_list", "get_system_status", "get_queue_status"],
+        lifecycle_type="internal",
+        nlu_description="- cassiopeia_agent: 시스템 상태 조회 및 관리 전용.",
+        permission_preset="standard"
+    )
 
     ctx.cassiopeia_client = CassiopeiaClient(agent_id="cassiopeia-api", redis_url=redis_url)
     await ctx.cassiopeia_client.connect()
@@ -263,7 +236,7 @@ async def _startup(app: FastAPI):  # noqa: C901
 
     ctx.llm_gateway = LLMGatewayHandler(
         redis_client=ctx.redis_client,
-        llm_provider=nlu_engine._provider,
+        llm_provider=ctx.manager.brain.provider,
         cassiopeia=ctx.cassiopeia_client,
         rate_limiter=TokenRateLimiter(redis_client=ctx.redis_client),
     )
@@ -277,9 +250,16 @@ async def _startup(app: FastAPI):  # noqa: C901
         ctx.health_monitor.monitor_loop(interval=30), name="cassiopeia_health_monitor"
     )
 
+    # SystemExecutor: Redis 큐에서 시스템 제어/복구 명령을 소비하여 Docker API 호출
+    ctx.system_executor = SystemExecutor(redis_client=ctx.redis_client)
+    ctx.executor_task = asyncio.create_task(
+        ctx.system_executor.run(), name="cassiopeia_system_executor"
+    )
+    logger.info("[Lifespan] SystemExecutor 시작 완료")
+
 
 async def _shutdown():
-    for t in [ctx.listen_task, ctx.monitor_task]:
+    for t in [ctx.listen_task, ctx.monitor_task, ctx.executor_task]:
         if t and not t.done():
             t.cancel()
             try:
@@ -425,6 +405,22 @@ class LLMKeyUpdateBody(BaseModel):
 
 
 SUPPORTED_LLM_PROVIDERS = ["gemini", "claude", "openai", "local"]
+
+
+class UpdateSecurityBody(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=200)
+    new_password: str = Field(..., min_length=1, max_length=200)
+    mfa_enabled: bool = Field(default=False)
+    mfa_type: str | None = Field(None, max_length=50)
+
+
+class CreditTopupBody(BaseModel):
+    amount: float = Field(..., gt=0, description="충전 금액 (양수여야 함)")
+    currency: str = Field(..., min_length=1, max_length=10)
+    payment_method_id: str = Field(..., min_length=1, max_length=200)
+
+
+_ADVANCED_AGENT_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 # ── 시스템 엔드포인트 ──────────────────────────────────────────────────────────
@@ -699,26 +695,22 @@ async def cancel_task(
     return {"status": "CANCELLED", "task_id": task_id}
 
 
-# ── NLU 분석 ──────────────────────────────────────────────────────────────────
+# ── Static Files & Admin UI ────────────────────────────────────────────────────
 
+# 정적 파일 경로 설정 (setup.html 등)
+static_path = os.path.join(os.path.dirname(__file__), "static")
+if not os.path.exists(static_path):
+    os.makedirs(static_path, exist_ok=True)
 
-@app.post("/nlu/analyze", tags=["NLU"], dependencies=[Depends(verify_client_key)])
-async def nlu_analyze(body: NLUAnalyzeBody) -> dict[str, Any]:
-    """디스패치 없이 NLU 의도 분석 결과만 반환합니다 (개발·테스트용)."""
-    context: list[dict[str, Any]] = []
-    if body.include_context:
-        context = await ctx.state_manager.build_context_for_llm(
-            body.session_id, body.user_id
-        )
+app.mount("/static", StaticFiles(directory=static_path), name="static")
 
-    agent_capabilities = await ctx.health_monitor.get_nlu_capabilities() or None
-    result = await ctx.manager._nlu.analyze(
-        body.text,
-        body.session_id,
-        context,
-        agent_capabilities=agent_capabilities,
-    )
-    return result.model_dump()
+@app.get("/admin/setup", include_in_schema=False)
+async def admin_setup_page():
+    """비개발자용 에이전트 설정 위저드 웹페이지를 제공합니다."""
+    setup_file = os.path.join(static_path, "setup.html")
+    if not os.path.exists(setup_file):
+        raise HTTPException(status_code=404, detail="Setup page not found")
+    return FileResponse(setup_file)
 
 
 # ── 직접 디스패치 ──────────────────────────────────────────────────────────────
@@ -918,6 +910,213 @@ async def update_profile(user_id: str, body: UpdateUserProfileBody) -> dict[str,
     profile = await ctx.state_manager.get_user_profile(user_id)
     profile.pop("llm_keys", None)
     return profile
+
+
+# ── api_spec — 보안 설정 변경 ────────────────────────────────────────────────
+
+@app.put("/users/{user_id}/security", tags=["사용자"],
+         dependencies=[Depends(verify_client_key)])
+async def update_security(user_id: str, body: UpdateSecurityBody) -> dict[str, Any]:
+    """비밀번호 및 MFA 설정을 변경합니다."""
+    if body.current_password == body.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="새 비밀번호가 현재 비밀번호와 동일합니다.",
+        )
+    if len(body.new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="새 비밀번호는 최소 8자 이상이어야 합니다.",
+        )
+    # 보안 설정은 Redis에 별도 저장 (SQLite users 테이블 스키마 변경 없이 확장 가능)
+    security_key = f"user:{user_id}:security"
+    mapping: dict[str, str] = {
+        "mfa_enabled": str(body.mfa_enabled).lower(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if body.mfa_type is not None:
+        mapping["mfa_type"] = body.mfa_type
+    await ctx.redis_client.hset(security_key, mapping=mapping)
+    # 사용자 프로필이 없으면 자동 생성 (GET /profile 200 보장)
+    await ctx.state_manager.get_user_profile(user_id)
+    return {"status": "updated"}
+
+
+# ── api_spec — 보안 설정 변경 (스펙 경로: PUT /user/security) ───────────────────
+
+@app.put("/user/security", tags=["사용자"],
+         dependencies=[Depends(verify_client_key)])
+async def update_security_spec(
+    body: UpdateSecurityBody,
+    user_id: str = Query(default="api-user", description="사용자 ID (기본값: 'api-user')"),
+) -> dict[str, Any]:
+    """
+    스펙 경로: PUT /user/security — user_id 는 쿼리 파라미터 (기본값: 'api-user').
+    기존 경로 PUT /users/{user_id}/security 는 하위 호환성을 위해 유지됩니다.
+    """
+    if body.current_password == body.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="새 비밀번호가 현재 비밀번호와 동일합니다.",
+        )
+    if len(body.new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="새 비밀번호는 최소 8자 이상이어야 합니다.",
+        )
+    security_key = f"user:{user_id}:security"
+    mapping: dict[str, str] = {
+        "mfa_enabled": str(body.mfa_enabled).lower(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if body.mfa_type is not None:
+        mapping["mfa_type"] = body.mfa_type
+    await ctx.redis_client.hset(security_key, mapping=mapping)
+    await ctx.state_manager.get_user_profile(user_id)
+    return {"status": "updated"}
+
+
+# ── api_spec — 크레딧 충전 (스펙 경로: POST /user/credits/topup) ─────────────────
+
+@app.post("/user/credits/topup", tags=["사용자"],
+          dependencies=[Depends(verify_client_key)])
+async def credit_topup_spec(
+    body: CreditTopupBody,
+    request: Request,
+    user_id: str = Query(default="api-user", description="사용자 ID (기본값: 'api-user')"),
+) -> dict[str, Any]:
+    """
+    스펙 경로: POST /user/credits/topup — user_id 는 쿼리 파라미터 (기본값: 'api-user').
+    기존 경로 POST /users/{user_id}/credits/topup 은 하위 호환성을 위해 유지됩니다.
+    """
+    idem_key = request.headers.get("X-Idempotency-Key")
+    _idem_cache_key = f"topup:{idem_key}" if idem_key else None
+
+    if _idem_cache_key:
+        cached = await ctx.state_manager.get_idempotency_result(_idem_cache_key)
+        if cached:
+            return cached
+
+    credits_key = f"user:{user_id}:credits"
+    current_raw = await ctx.redis_client.get(credits_key)
+    current_balance = float(current_raw) if current_raw else 0.0
+    new_balance = current_balance + body.amount
+    await ctx.redis_client.set(credits_key, str(new_balance))
+
+    transaction_id = f"TX-{uuid.uuid4().hex[:6].upper()}"
+    result: dict[str, Any] = {
+        "transaction_id": transaction_id,
+        "new_balance": new_balance,
+    }
+    if _idem_cache_key:
+        await ctx.state_manager.save_idempotency_result(_idem_cache_key, result)
+    return result
+
+
+# ── api_spec — 크레딧 충전 (하위 호환 경로) ────────────────────────────────────
+
+@app.post("/users/{user_id}/credits/topup", tags=["사용자"],
+          dependencies=[Depends(verify_client_key)])
+async def credit_topup(
+    user_id: str, body: CreditTopupBody, request: Request
+) -> dict[str, Any]:
+    """크레딧을 충전합니다. X-Idempotency-Key 헤더로 중복 처리를 방지합니다."""
+    idem_key = request.headers.get("X-Idempotency-Key")
+    _idem_cache_key = f"topup:{idem_key}" if idem_key else None
+
+    # 멱등성 체크 — 동일 키로 이미 처리된 경우 캐시 결과 반환
+    if _idem_cache_key:
+        cached = await ctx.state_manager.get_idempotency_result(_idem_cache_key)
+        if cached:
+            return cached
+
+    # 크레딧 잔액은 Redis에 별도 저장 (SQLite users 테이블 스키마 변경 없이 확장)
+    credits_key = f"user:{user_id}:credits"
+    current_raw = await ctx.redis_client.get(credits_key)
+    current_balance = float(current_raw) if current_raw else 0.0
+    new_balance = current_balance + body.amount
+    await ctx.redis_client.set(credits_key, str(new_balance))
+
+    transaction_id = f"TX-{uuid.uuid4().hex[:6].upper()}"
+    result: dict[str, Any] = {
+        "transaction_id": transaction_id,
+        "new_balance": new_balance,
+    }
+    if _idem_cache_key:
+        await ctx.state_manager.save_idempotency_result(_idem_cache_key, result)
+    return result
+
+
+# ── api_spec — 마켓플레이스 에이전트 상세 조회 ──────────────────────────────────
+
+@app.get("/marketplace/agents/{agent_id}/details", tags=["마켓플레이스"])
+async def get_marketplace_agent_details(agent_id: str) -> dict[str, Any]:
+    """
+    마켓플레이스 에이전트의 상세 메타데이터를 조회합니다.
+    데이터는 Redis 키 marketplace:agent:{id}:details 에 JSON으로 저장됩니다.
+    인증 불필요 (공개 엔드포인트).
+    """
+    raw = await ctx.redis_client.get(f"marketplace:agent:{agent_id}:details")
+    if not raw:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"마켓플레이스에서 에이전트 '{agent_id}'를 찾을 수 없습니다.",
+        )
+    return json.loads(raw)
+
+
+# ── api_spec — 고급 에이전트 등록 (Multipart) ────────────────────────────────
+
+@app.post(
+    "/agents/register/advanced",
+    tags=["에이전트 관리"],
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(verify_client_key)],
+)
+async def register_agent_advanced(
+    metadata: str = Form(..., description="에이전트 메타데이터 JSON 문자열"),
+    icon: UploadFile | None = File(None, description="에이전트 아이콘 이미지 (선택)"),
+) -> dict[str, Any]:
+    """
+    에이전트를 고급 설정과 함께 등록합니다 (Multipart Form-Data).
+    metadata 필드는 JSON 문자열이어야 하며 name 필드를 포함해야 합니다.
+    name은 영문자·숫자·언더스코어만 허용됩니다.
+    """
+    try:
+        meta = json.loads(metadata)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"metadata는 유효한 JSON 문자열이어야 합니다: {exc}",
+        )
+
+    name: str | None = meta.get("name")
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="metadata에 'name' 필드가 필요합니다.",
+        )
+    if not _ADVANCED_AGENT_NAME_RE.match(name):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="에이전트 이름은 영문자·숫자·언더스코어만 허용됩니다 (공백·특수문자 불가).",
+        )
+
+    agent_id = f"agent-{uuid.uuid4().hex[:8]}"
+    registry_data: dict[str, Any] = {
+        "agent_id": agent_id,
+        "name": name,
+        "description": meta.get("description", ""),
+        "economics": meta.get("economics", {}),
+        "permissions": meta.get("permissions", {}),
+        "registered_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await ctx.redis_client.hset(
+        "agents:registry",
+        name,
+        json.dumps(registry_data, ensure_ascii=False),
+    )
+    return {"agent_id": agent_id}
 
 
 @app.put("/users/{user_id}/llm_keys/{provider_name}", tags=["사용자"],

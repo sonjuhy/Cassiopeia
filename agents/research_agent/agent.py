@@ -2,23 +2,24 @@
 Research Agent 구체 구현체
 - 웹 검색 및 정보 수집
 - 처리 결과를 HTTP POST /results 로 카시오페아에 전송
-- 태스크 수신은 ResearchCassiopeiaListener (cassiopeia-sdk Pub/Sub)가 담당
+- SDK v0.3.0의 AgentBrain을 사용하여 지능형 검색 의도 분석을 수행합니다.
 """
 
 import asyncio
 import json
 import logging
+import os
 from typing import Any
 
 import httpx
 
 from .config import ResearchAgentConfig, load_config_from_env
 from .providers import build_search_provider
-from .pipeline import IntentAnalyzer, SearchExecutor, ReportSynthesizer
+from .pipeline import SearchExecutor, ReportSynthesizer
 from shared_core.search.interfaces import SearchProviderProtocol
-from shared_core.llm.factory import build_llm_provider_from_config
-from shared_core.llm.llm_config import LLMConfig, load_llm_config_for_agent, llm_config_from_dispatch
 from shared_core.storage.sqlite_manager import SqliteStorageManager
+from cassiopeia_sdk.brain import AgentBrain, AgentBrainConfig
+from cassiopeia_sdk.tools import Tool
 
 logger = logging.getLogger("research_agent.agent")
 
@@ -51,61 +52,88 @@ class ResearchAgent:
 
         self._provider = provider
 
-        # 에이전트별 LLM 설정 (환경변수 RESEARCH_AGENT_LLM_BACKEND 우선)
-        self._llm_config: LLMConfig = load_llm_config_for_agent(self.agent_name)
-        llm = build_llm_provider_from_config(self._llm_config)
-
-        logger.info(
-            "[ResearchAgent] 초기화 완료 (LLM backend=%s, model=%s)",
-            self._llm_config.backend,
-            self._llm_config.model,
+        # SDK AgentBrain 초기화
+        self.brain = AgentBrain(
+            agent_name=self.agent_name,
+            capabilities="""당신은 웹 리서치 전문가입니다. 
+사용자의 질문을 분석하여 웹 검색 엔진에 최적화된 다수의 검색 쿼리를 생성하고, 
+검색 결과를 종합하여 전문적인 보고서를 작성합니다.""",
+            backend="gateway",
+            llm_caller=self._direct_llm_caller,
+            config=AgentBrainConfig(max_retries=2)
         )
 
+        logger.info("[ResearchAgent] SDK AgentBrain 기반 초기화 완료")
+
         # Initialize Pipeline Components
-        self._intent_analyzer = IntentAnalyzer(llm=llm)
         self._search_executor = SearchExecutor(provider=self._provider)
-        self._report_synthesizer = ReportSynthesizer(llm=llm)
+        # ReportSynthesizer는 직접 LLM을 사용하므로, 동일한 방식으로 우회 지원
+        from shared_core.llm.factory import build_llm_provider_from_config
+        from shared_core.llm.llm_config import LLMConfig
+        self._report_synthesizer = ReportSynthesizer(llm=build_llm_provider_from_config(LLMConfig(backend="gemini")))
 
         # Initialize Storage
         self._storage = storage or SqliteStorageManager()
 
-    def _build_pipeline_for_dispatch(self, dispatch_msg: dict) -> tuple[IntentAnalyzer, ReportSynthesizer]:
-        """dispatch별 per-call llm_config가 있으면 해당 LLM으로 파이프라인 컴포넌트를 생성합니다."""
-        per_call = llm_config_from_dispatch(dispatch_msg)
-        if per_call is None:
-            return self._intent_analyzer, self._report_synthesizer
-
-        logger.info(
-            "[ResearchAgent] per-call LLM 설정 적용 (backend=%s, model=%s)",
-            per_call.backend,
-            per_call.model,
-        )
-        llm = build_llm_provider_from_config(per_call)
-        return IntentAnalyzer(llm=llm), ReportSynthesizer(llm=llm)
+    async def _direct_llm_caller(self, messages: list[dict], max_tokens: int = 500, temperature: float = 0.7, model: str | None = None, **kwargs) -> Any:
+        from shared_core.llm.factory import build_llm_provider_from_config
+        from shared_core.llm.llm_config import LLMConfig
+        from cassiopeia_sdk.brain._models import LLMResponse
+        
+        system_msgs = [m["content"] for m in messages if m["role"] == "system"]
+        system_instruction = "\n".join(system_msgs) if system_msgs else None
+        
+        user_msgs = [m["content"] for m in messages if m["role"] != "system"]
+        prompt = "\n".join(user_msgs)
+        
+        llm = build_llm_provider_from_config(LLMConfig(backend="gemini", model=model))
+        response_text, usage = await llm.generate_response(prompt=prompt, system_instruction=system_instruction)
+        
+        return LLMResponse(task_id="direct", status="completed", content=response_text, usage={"total_tokens": usage.total_tokens} if usage else {})
 
     async def investigate(self, query: str, dispatch_msg: dict | None = None) -> str:
-        intent_analyzer, report_synthesizer = (
-            self._build_pipeline_for_dispatch(dispatch_msg)
-            if dispatch_msg is not None
-            else (self._intent_analyzer, self._report_synthesizer)
-        )
         try:
-            queries = await intent_analyzer.analyze(query)
+            # 1. SDK AgentBrain을 사용하여 검색 키워드(쿼리) 추출
+            # 검색 에이전트는 'search'라는 도구 하나를 전문적으로 사용한다고 가정
+            search_tool = Tool(
+                name="search", 
+                description="웹 검색을 수행하기 위한 최적의 키워드 리스트를 생성합니다.",
+                parameters={"queries": "웹 검색 엔진에 입력할 구체적인 검색어 리스트 (List of strings, 예: ['삼성전자 주가 전망', '반도체 시장 현황'])"}
+            )
+
+            decision = await self.brain.analyze_task(
+                user_request=query,
+                tools=[search_tool],
+                history=dispatch_msg.get("context", []) if dispatch_msg else []
+            )
+
+            if decision.action == "ask_clarification":
+                return decision.suggested_reply or "요청이 모호합니다. 좀 더 자세히 말씀해 주세요."
+
+            # 추출된 쿼리 목록 (없으면 원본 쿼리 사용)
+            queries = decision.params.get("queries")
+            if not queries or not isinstance(queries, list):
+                queries = [query]
+
+            logger.info(f"[ResearchAgent] 생성된 검색 쿼리: {queries}")
+
+            # 2. 검색 실행
             results = await self._search_executor.execute(queries)
-            report, citations = await report_synthesizer.synthesize(query, results)
+            
+            # 3. 결과 요약 (보고서 생성)
+            report, citations = await self._report_synthesizer.synthesize(query, results)
 
             final_report = report
             if citations:
                 final_report += "\n\n### 출처\n" + "\n".join(f"- {c}" for c in citations)
             return final_report
+
         except Exception as e:
-            return f"검색 중 오류 발생: {e}"
+            logger.error(f"[ResearchAgent] 조사 중 오류 발생: {e}")
+            return f"조사 과정에서 오류가 발생했습니다: {e}"
 
     async def _dispatch(self, action: str, payload: dict, dispatch_msg: dict | None = None) -> dict[str, Any]:
-        # NLU가 임의의 액션명(search_stock_market 등)이나 파라미터(topic, query 등)를 생성할 수 있으므로 유연하게 처리
         query = payload.get("query") or payload.get("topic") or payload.get("keyword") or str(payload)
-        
-        # 조사 에이전트는 본질적으로 검색/조사 역할 하나만 수행하므로 액션명에 구애받지 않고 investigate를 실행
         result_text = await self.investigate(query, dispatch_msg=dispatch_msg)
         return {"status": "success", "data": result_text}
 
@@ -135,8 +163,12 @@ class ResearchAgent:
 
         url = f"{cassiopeia_url}/results"
         headers = {}
-        if self._config.cassiopeia_api_key:
-            headers["X-API-Key"] = self._config.cassiopeia_api_key
+        
+        # 환경변수 또는 설정에서 인증 키 로드 (따옴표 제거 필수)
+        api_key = self._config.cassiopeia_api_key or os.environ.get("ADMIN_API_KEY") or os.environ.get("CLIENT_API_KEY", "")
+        api_key = api_key.strip("\"'")
+        if api_key:
+            headers["X-API-Key"] = api_key
 
         for attempt in range(3):
             try:
