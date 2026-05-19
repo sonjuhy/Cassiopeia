@@ -167,29 +167,6 @@ class TestReceiveLog:
 
 # ── /nlu/analyze ─────────────────────────────────────────────────────────────
 
-class TestNluAnalyze:
-    async def test_returns_nlu_result(self, async_client):
-        resp = await async_client.post("/nlu/analyze", json={
-            "text": "파일 읽어줘",
-            "session_id": "test-sess",
-            "user_id": "user-1",
-        })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "type" in data
-
-    async def test_include_context_flag(self, async_client):
-        resp = await async_client.post("/nlu/analyze", json={
-            "text": "테스트",
-            "session_id": "sess-1",
-            "user_id": "user-1",
-            "include_context": True,
-        })
-        assert resp.status_code == 200
-
-
-# ── /dispatch ────────────────────────────────────────────────────────────────
-
 class TestDirectDispatch:
     async def test_503_when_agent_not_ready(self, async_client):
         resp = await async_client.post("/dispatch", json={

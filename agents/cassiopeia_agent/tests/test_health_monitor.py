@@ -240,30 +240,67 @@ class TestGetAvailableAgents:
 # ── get_nlu_capabilities ──────────────────────────────────────────────────────
 
 class TestGetNluCapabilities:
-    async def test_returns_nlu_description_from_health(self, health_monitor):
-        await _register(health_monitor, "agent_a", "long_running")
+    async def test_returns_nlu_description_from_registry(self, health_monitor):
+        await health_monitor._redis.hset("agents:registry", "agent_a", json.dumps({
+            "name": "agent_a",
+            "capabilities": [],
+            "lifecycle_type": "long_running",
+            "nlu_description": "agent_a: 파일 작업",
+            "permission_preset": "standard",
+            "allow_llm_access": False,
+        }))
         await _set_health(health_monitor, "agent_a",
-                          last_heartbeat=_now_iso(),
-                          nlu_description="agent_a: 파일 작업")
+                          last_heartbeat=_now_iso())
+        
+        # 캐시 초기화
+        health_monitor._capabilities_cache = ""
+        health_monitor._capabilities_cache_at = 0.0
         caps = await health_monitor.get_nlu_capabilities()
         assert "agent_a: 파일 작업" in caps
 
     async def test_cache_hit_returns_same_value(self, health_monitor):
-        await _register(health_monitor, "agent_a", "long_running")
-        await _set_health(health_monitor, "agent_a",
-                          last_heartbeat=_now_iso(),
-                          nlu_description="desc_A")
+        await health_monitor._redis.hset("agents:registry", "agent_a", json.dumps({
+            "name": "agent_a",
+            "capabilities": [],
+            "lifecycle_type": "long_running",
+            "nlu_description": "desc_A",
+            "permission_preset": "standard",
+            "allow_llm_access": False,
+        }))
+        await _set_health(health_monitor, "agent_a", last_heartbeat=_now_iso())
+        
+        # 캐시 초기화
+        health_monitor._capabilities_cache = ""
+        health_monitor._capabilities_cache_at = 0.0
+        
         first = await health_monitor.get_nlu_capabilities()
         # 캐시가 갱신되기 전에 Redis 값을 바꿔도 캐시된 값을 반환해야 한다
-        await _set_health(health_monitor, "agent_a", nlu_description="desc_CHANGED")
+        await health_monitor._redis.hset("agents:registry", "agent_a", json.dumps({
+            "name": "agent_a",
+            "capabilities": [],
+            "lifecycle_type": "long_running",
+            "nlu_description": "desc_CHANGED",
+            "permission_preset": "standard",
+            "allow_llm_access": False,
+        }))
         second = await health_monitor.get_nlu_capabilities()
         assert first == second
 
     async def test_stale_agent_excluded(self, health_monitor):
-        await _register(health_monitor, "agent_a", "long_running")
+        await health_monitor._redis.hset("agents:registry", "agent_a", json.dumps({
+            "name": "agent_a",
+            "capabilities": [],
+            "lifecycle_type": "long_running",
+            "nlu_description": "오래된 에이전트",
+            "permission_preset": "standard",
+            "allow_llm_access": False,
+        }))
         await _set_health(health_monitor, "agent_a",
-                          last_heartbeat=_old_iso(60),
-                          nlu_description="오래된 에이전트")
+                          last_heartbeat=_old_iso(60))
+        
+        # 캐시 초기화
+        health_monitor._capabilities_cache = ""
+        health_monitor._capabilities_cache_at = 0.0
         caps = await health_monitor.get_nlu_capabilities()
         assert "오래된 에이전트" not in caps
 

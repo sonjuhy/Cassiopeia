@@ -16,7 +16,6 @@ def mock_health():
 def manager(mock_state, mock_health):
     m = CassiopeiaManager(
         redis_client=AsyncMock(),
-        nlu_engine=AsyncMock(),
         state_manager=mock_state,
         health_monitor=mock_health
     )

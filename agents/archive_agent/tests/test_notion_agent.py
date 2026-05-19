@@ -15,13 +15,18 @@ def mock_env():
 @pytest.mark.asyncio
 async def test_notion_agent_storage_integration(mock_env):
     # Arrange
-    mock_task_analyzer = AsyncMock()
-    mock_task_analyzer.analyze_task.return_value = '{"action": "query_database", "target_id": "db_123", "query": "test"}'
-    
-    agent = ArchiveAgent(task_analyzer=mock_task_analyzer)
+    agent = ArchiveAgent()
     agent._storage = AsyncMock()
     agent._storage.save_data.return_value = "ref_notion_123"
     agent.logger = AsyncMock()
+    
+    # Mock brain decision
+    from cassiopeia_sdk.brain import BrainDecision
+    mock_decision = BrainDecision(
+        action="query_database", 
+        params={"target_id": "db_123", "query": "test"}
+    )
+    agent.brain.analyze_task = AsyncMock(return_value=mock_decision)
     
     # Mock Notion DB search response
     agent.search_notion = AsyncMock(return_value=[{"id": "db_123", "object": "database", "title": "Test Page"}])

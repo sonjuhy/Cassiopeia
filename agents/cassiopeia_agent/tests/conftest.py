@@ -109,14 +109,6 @@ async def state_manager(fake_redis, tmp_path):
         await sm.close()
 
 
-# ── NLUEngine ────────────────────────────────────────────────────────────────
-
-@pytest.fixture
-def nlu_engine(mock_llm_provider):
-    from agents.cassiopeia_agent.nlu_engine import NLUEngine
-    return NLUEngine(provider=mock_llm_provider)
-
-
 # ── CassiopeiaManager ─────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -131,11 +123,10 @@ def mock_cassiopeia():
 
 
 @pytest_asyncio.fixture
-async def manager(fake_redis, nlu_engine, state_manager, health_monitor, mock_cassiopeia):
+async def manager(fake_redis, state_manager, health_monitor, mock_cassiopeia):
     from agents.cassiopeia_agent.manager import CassiopeiaManager
     return CassiopeiaManager(
         redis_client=fake_redis,
-        nlu_engine=nlu_engine,
         state_manager=state_manager,
         health_monitor=health_monitor,
         cassiopeia=mock_cassiopeia,
@@ -145,7 +136,7 @@ async def manager(fake_redis, nlu_engine, state_manager, health_monitor, mock_ca
 # ── FastAPI TestClient ────────────────────────────────────────────────────────
 
 @pytest_asyncio.fixture
-async def async_client(fake_redis, nlu_engine, tmp_path):
+async def async_client(fake_redis, tmp_path):
     import httpx
     from agents.cassiopeia_agent.main import app
     from agents.cassiopeia_agent import app_context
@@ -170,7 +161,6 @@ async def async_client(fake_redis, nlu_engine, tmp_path):
     hm = HealthMonitor(redis_client=fake_redis)
     mgr = CassiopeiaManager(
         redis_client=fake_redis,
-        nlu_engine=nlu_engine,
         state_manager=sm,
         health_monitor=hm,
         cassiopeia=mock_cass,

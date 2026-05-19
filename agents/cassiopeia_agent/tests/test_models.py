@@ -10,14 +10,10 @@ from pydantic import ValidationError
 
 from agents.cassiopeia_agent.models import (
     AGENT_TIMEOUT_MAP,
-    ClarificationNLUResult,
-    DirectResponseNLUResult,
-    MultiStepNLUResult,
     NLUMetadata,
     NLU_CONFIDENCE_THRESHOLD,
     PlanStep,
     PlanStepMetadata,
-    SingleNLUResult,
     _build_timeout_map,
 )
 
@@ -51,118 +47,6 @@ class TestNLUMetadata:
         assert m.requires_user_approval is False
 
 
-# ── SingleNLUResult ───────────────────────────────────────────────────────────
-
-class TestSingleNLUResult:
-    def test_valid(self):
-        r = SingleNLUResult(
-            type="single",
-            intent="파일 읽기",
-            selected_agent="file_agent",
-            action="read_file",
-            params={"path": "/tmp/a.txt"},
-            metadata={"reason": "r", "confidence_score": 0.9, "requires_user_approval": False},
-        )
-        assert r.type == "single"
-        assert r.selected_agent == "file_agent"
-
-    def test_wrong_type_literal(self):
-        with pytest.raises(ValidationError):
-            SingleNLUResult(
-                type="multi_step",
-                intent="x",
-                selected_agent="file_agent",
-                action="read_file",
-                params={},
-                metadata={"reason": "r", "confidence_score": 0.9, "requires_user_approval": False},
-            )
-
-
-# ── MultiStepNLUResult ────────────────────────────────────────────────────────
-
-class TestMultiStepNLUResult:
-    def test_valid(self):
-        r = MultiStepNLUResult(
-            type="multi_step",
-            intent="복합 작업",
-            plan=[
-                {
-                    "step": 1,
-                    "selected_agent": "file_agent",
-                    "action": "read_file",
-                    "params": {},
-                    "depends_on": [],
-                    "metadata": {"reason": "r", "requires_user_approval": False},
-                }
-            ],
-            metadata={"reason": "r", "confidence_score": 0.8, "requires_user_approval": False},
-        )
-        assert len(r.plan) == 1
-        assert r.plan[0].step == 1
-
-    def test_plan_step_depends_on_defaults_empty(self):
-        step = PlanStep(
-            step=1,
-            selected_agent="file_agent",
-            action="read_file",
-            params={},
-            metadata=PlanStepMetadata(reason="r"),
-        )
-        assert step.depends_on == []
-
-
-# ── ClarificationNLUResult ────────────────────────────────────────────────────
-
-class TestClarificationNLUResult:
-    def test_valid(self):
-        r = ClarificationNLUResult(
-            type="clarification",
-            intent="unclear",
-            selected_agent="communication_agent",
-            action="ask_clarification",
-            params={"question": "무엇을 원하시나요?", "options": ["A", "B"]},
-            metadata={"reason": "r", "confidence_score": 0.3, "requires_user_approval": False},
-        )
-        assert r.params.question == "무엇을 원하시나요?"
-        assert r.params.options == ["A", "B"]
-
-    def test_options_defaults_empty(self):
-        r = ClarificationNLUResult(
-            type="clarification",
-            intent="unclear",
-            selected_agent="communication_agent",
-            action="ask_clarification",
-            params={"question": "?"},
-            metadata={"reason": "r", "confidence_score": 0.2, "requires_user_approval": False},
-        )
-        assert r.params.options == []
-
-    def test_wrong_agent_literal(self):
-        with pytest.raises(ValidationError):
-            ClarificationNLUResult(
-                type="clarification",
-                intent="x",
-                selected_agent="file_agent",  # wrong: must be communication_agent
-                action="ask_clarification",
-                params={"question": "?"},
-                metadata={"reason": "r", "confidence_score": 0.2, "requires_user_approval": False},
-            )
-
-
-# ── DirectResponseNLUResult ───────────────────────────────────────────────────
-
-class TestDirectResponseNLUResult:
-    def test_valid(self):
-        r = DirectResponseNLUResult(
-            type="direct_response",
-            intent="chitchat",
-            params={"answer": "안녕하세요!"},
-            metadata={"reason": "단순 인사", "confidence_score": 1.0, "requires_user_approval": False},
-        )
-        assert r.params["answer"] == "안녕하세요!"
-
-
-# ── AGENT_TIMEOUT_MAP ─────────────────────────────────────────────────────────
 
 class TestAgentTimeoutMap:
     def test_default_values(self):
