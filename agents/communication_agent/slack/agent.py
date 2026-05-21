@@ -246,9 +246,16 @@ class SlackCommAgent:
         """15초마다 Cassiopeia Agent에 생존 신호를 기록합니다 (유효 시간 30초)."""
         from datetime import datetime, timezone
         logger.info("[CommAgent] 하트비트 루프 시작 (agent=%s)", self.agent_name)
+        
+        nlu_desc = (
+            "- communication_agent: 사용자와의 일반적인 대화, 추가 질문 요청(ask_clarification), "
+            "또는 명확하지 않은 요청에 대해 사용자에게 답변할 때 사용합니다. (actions: ask_clarification, send_message)"
+        )
+
         while True:
             try:
                 if self._redis:
+                    # 1. 헬스 상태 업데이트
                     await self._redis.update_agent_health(
                         self.agent_name,
                         {
@@ -257,12 +264,25 @@ class SlackCommAgent:
                             "version": "1.0.0",
                         },
                     )
-                    logger.debug("[CommAgent] 하트비트 전송 완료 (agent=%s)", self.agent_name)
+                    
+                    # 2. 중앙 레지스트리에 능력치 등록 (동적 라우팅용)
+                    await self._redis.update_agent_registry(
+                        self.agent_name,
+                        {
+                            "name": self.agent_name,
+                            "lifecycle_type": "long_running",
+                            "nlu_description": nlu_desc,
+                            "capabilities": ["message", "communication"],
+                            "registered_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+                    
+                    logger.debug("[CommAgent] 하트비트/레지스트리 갱신 완료 (agent=%s)", self.agent_name)
                 await asyncio.sleep(15)
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("[CommAgent] 하트비트 전송 실패: %s", e)
+                logger.error("[CommAgent] 하트비트 갱신 실패: %s", e)
                 await asyncio.sleep(5)
 
     async def _handle_system_result(self, result: dict[str, Any]) -> None:

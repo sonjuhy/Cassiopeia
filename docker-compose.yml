@@ -79,6 +79,12 @@ services:
       - NLU_CONFIDENCE_THRESHOLD=${NLU_CONFIDENCE_THRESHOLD:-0.7}
       - NLU_LLM_MODEL=${NLU_LLM_MODEL:-gemini-2.5-flash}
       - NLU_LLM_TEMPERATURE=${NLU_LLM_TEMPERATURE:-0.2}
+      # NLU 폴백 에이전트 — 라우팅 실패 시 사용 (기본값: cassiopeia 자기 자신)
+      - NLU_FALLBACK_AGENT=${NLU_FALLBACK_AGENT:-cassiopeia}
+      # 플랫폼별 통신 큐 추가 매핑 (기본 slack/discord/telegram 외 플랫폼)
+      # 형식: "platform1=queue:key1,platform2=queue:key2"
+      - PLATFORM_COMM_QUEUES=${PLATFORM_COMM_QUEUES:-}
+      - DEFAULT_COMM_QUEUE=${DEFAULT_COMM_QUEUE:-agent:communication:tasks}
       # 타임아웃 / Circuit Breaker
       - RESPONSE_TIMEOUT_SEC=${RESPONSE_TIMEOUT_SEC:-30.0}
       - CB_THRESHOLD=${CB_THRESHOLD:-3}
@@ -104,8 +110,8 @@ services:
       - SANDBOX_API_KEY=${SANDBOX_API_KEY}
       - SANDBOX_IMAGE=agentmonorepo-sandbox_agent
       - SANDBOX_RUNTIME=${SANDBOX_RUNTIME:-docker}
-    # volumes:
-    #   - /var/run/docker.sock:/var/run/docker.sock  # 보안 강화를 위해 제거 (ephemeral 모드 사용 시 필요)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # 보안 강화를 위해 제거 (ephemeral 모드 사용 시 필요)
 
   # ─────────────────────────────────────────────
   # Sandbox Agent: 격리된 코드 실행 전용 에이전트

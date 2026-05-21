@@ -1,0 +1,106 @@
+name: Test
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'agents/**'
+      - 'shared_core/**'
+      - 'pytest.ini'
+      - 'requirements*.txt'
+      - '.github/workflows/test.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'agents/**'
+      - 'shared_core/**'
+
+jobs:
+  test:
+    name: pytest (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      # ── 공통 의존성 ──────────────────────────────────────────────────────────
+      - name: Install shared_core dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r shared_core/requirements.txt
+
+      # ── 에이전트별 의존성 ────────────────────────────────────────────────────
+      - name: Install cassiopeia_agent dependencies
+        run: pip install -r agents/cassiopeia_agent/requirements.txt
+
+      - name: Install communication_agent dependencies
+        run: pip install -r agents/communication_agent/requirements.txt
+
+      - name: Install archive_agent dependencies
+        run: pip install -r agents/archive_agent/requirements.txt
+
+      - name: Install research_agent dependencies
+        run: pip install -r agents/research_agent/requirements.txt
+
+      # ── 테스트 전용 의존성 ───────────────────────────────────────────────────
+      - name: Install test dependencies
+        run: |
+          pip install \
+            pytest \
+            pytest-asyncio \
+            pytest-env \
+            fakeredis \
+            httpx \
+            python-multipart
+
+      # ── 테스트 실행 ──────────────────────────────────────────────────────────
+      - name: Run tests
+        env:
+          ADMIN_API_KEY: test-admin-key
+          CLIENT_API_KEY: test-client-key
+          ENCRYPTION_KEY: sjbWLtj1X4WskngsFoQj-21Bx37TgszKXX0b2vlQhHY=
+          DISPATCH_HMAC_SECRET: test-hmac-secret
+          GEMINI_API_KEY: dummy-key
+          ANTHROPIC_API_KEY: dummy-key
+          REDIS_CASSIOPEIA_PASSWORD: test-pass
+          REDIS_COMMUNITY_PASSWORD: test-pass
+          SANDBOX_API_KEY: test-sandbox-key
+          LLM_BACKEND: gemini
+        run: |
+          pytest --tb=short -q
+
+      # ── 커버리지 리포트 (선택적 — PR에서만) ───────────────────────────────────
+      - name: Generate coverage report
+        if: github.event_name == 'pull_request'
+        env:
+          ADMIN_API_KEY: test-admin-key
+          CLIENT_API_KEY: test-client-key
+          ENCRYPTION_KEY: sjbWLtj1X4WskngsFoQj-21Bx37TgszKXX0b2vlQhHY=
+          DISPATCH_HMAC_SECRET: test-hmac-secret
+          GEMINI_API_KEY: dummy-key
+          ANTHROPIC_API_KEY: dummy-key
+          REDIS_CASSIOPEIA_PASSWORD: test-pass
+          REDIS_COMMUNITY_PASSWORD: test-pass
+          SANDBOX_API_KEY: test-sandbox-key
+          LLM_BACKEND: gemini
+        run: |
+          pip install pytest-cov
+          pytest --cov=agents --cov=shared_core --cov-report=term-missing --cov-report=xml -q
+        continue-on-error: true
+
+      - name: Upload coverage to Codecov
+        if: github.event_name == 'pull_request'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false

@@ -9,14 +9,20 @@ on:
       - '.github/workflows/deploy_cassiopeia_agent.yml'
 
 jobs:
+  # ── 테스트 ──────────────────────────────────────────────────────────────────
+  test:
+    uses: ./.github/workflows/test.yml
+
+  # ── 빌드 & 배포 (테스트 통과 후) ─────────────────────────────────────────────
   build-and-deploy:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:

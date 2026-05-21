@@ -27,6 +27,7 @@ _HEALTH_KEY = f"agent:{_AGENT_NAME}:health"
 _DLQ_KEY = "cassiopeia:dlq"
 _HEARTBEAT_INTERVAL: int = int(os.environ.get("HEARTBEAT_INTERVAL", "15"))
 _HTTP_REPORT_TIMEOUT: float = float(os.environ.get("HTTP_REPORT_TIMEOUT", "10.0"))
+_DISPATCH_TIMEOUT: float = float(os.environ.get("DISPATCH_TIMEOUT", "60.0"))
 _HEALTH_TTL: int = _HEARTBEAT_INTERVAL * 4
 
 _NLU_DESCRIPTION = (
@@ -36,8 +37,8 @@ _NLU_DESCRIPTION = (
     "    - get_database_schema: 특정 데이터베이스의 컬럼 구조 및 타입 파악 (params: database_id)\n"
     "    - query_database: 데이터베이스 항목 목록 조회 (params: database_id[선택])\n"
     "    - get_page: 특정 페이지 상세 내용 조회 (params: page_id[필수])\n"
-    "    - create_page: 노션에 새 페이지 생성 또는 저장 (params: title[필수], database_id[선택], content[선택])"
-    " - \"저장해줘\", \"기록해줘\", \"노션에 써줘\" 요청에 사용\n"
+    "    - create_page: 노션에 새 페이지 생성 또는 저장 (params: title[필수], database_id[선택], content[선택])\n"
+    "    - search_objects: 노션 내의 페이지, DB를 가리지 않고 키워드 기반 통합 검색 (params: query)\n"
     "    - search: 노션/옵시디언 전체 검색 (params: query)\n"
     "    - read_file: 옵시디언 파일 내용 읽기 (params: page_id)\n"
     "    - write_file: 옵시디언 파일 생성/수정 (params: title[필수], content[선택])\n"
@@ -130,8 +131,7 @@ class ArchiveCassiopeiaListener:
                 ...
             }
         """
-        dispatch_msg: dict[str, Any] = msg.payload
-        task_id = dispatch_msg.get("task_id", "unknown")
+        task_id = "unknown"
         agent_result: dict[str, Any] = {
             "task_id": task_id,
             "agent": _AGENT_NAME,
@@ -143,13 +143,28 @@ class ArchiveCassiopeiaListener:
             "usage_stats": {},
         }
         try:
+            dispatch_msg: dict[str, Any] = msg.payload if isinstance(msg.payload, dict) else {}
+            task_id = dispatch_msg.get("task_id", "unknown")
+            agent_result["task_id"] = task_id
+
             logger.info("[ArchiveCassiopeiaListener] 태스크 수신: task_id=%s action=%s", task_id, msg.action)
 
             self._current_task_count += 1
             await self._update_health("BUSY")
 
-            result = await self._agent.handle_dispatch(dispatch_msg)
-            agent_result = {**result, "agent": _AGENT_NAME, "task_id": task_id}
+            try:
+                result = await asyncio.wait_for(
+                    self._agent.handle_dispatch(dispatch_msg),
+                    timeout=_DISPATCH_TIMEOUT
+                )
+                agent_result = {**result, "agent": _AGENT_NAME, "task_id": task_id}
+            except (asyncio.TimeoutError, TimeoutError):
+                logger.error("[ArchiveCassiopeiaListener] 태스크 처리 시간 초과 task_id=%s", task_id)
+                agent_result["error"] = {
+                    "code": "TIMEOUT",
+                    "message": f"태스크 처리가 시간 초과되었습니다 ({_DISPATCH_TIMEOUT}초).",
+                    "traceback": None,
+                }
 
         except asyncio.CancelledError:
             logger.warning("[ArchiveCassiopeiaListener] 태스크 취소됨: task_id=%s", task_id)
@@ -208,11 +223,18 @@ class ArchiveCassiopeiaListener:
             "usage_stats": {},
         }
         url = f"{self._cassiopeia_url}/results"
+        
+        # 환경변수에서 인증 키 로드 (따옴표 제거)
+        api_key = (os.environ.get("ADMIN_API_KEY") or os.environ.get("CLIENT_API_KEY", "")).strip("\"'")
 
         for attempt in range(3):
             try:
                 async with httpx.AsyncClient(timeout=_HTTP_REPORT_TIMEOUT) as client:
-                    resp = await client.post(url, json=payload)
+                    resp = await client.post(
+                        url, 
+                        json=payload,
+                        headers={"X-API-Key": api_key}
+                    )
                     resp.raise_for_status()
                 logger.info(
                     "[ArchiveCassiopeiaListener] 결과 보고 완료: task_id=%s status=%s",
@@ -261,9 +283,11 @@ class ArchiveCassiopeiaListener:
             logger.info("[ArchiveCassiopeiaListener] heartbeat 정상 종료")
 
     async def _update_health(self, status: str) -> None:
-        """agent:archive_agent:health Hash 필드를 업데이트합니다."""
+        """agent:archive_agent:health Hash 필드를 업데이트하고 중앙 레지스트리에 능력치를 동적으로 등록합니다."""
         try:
             redis = await self._ensure_redis()
+            
+            # 1. 헬스 체크 업데이트 (하트비트)
             await redis.hset(
                 _HEALTH_KEY,
                 mapping={
@@ -272,11 +296,20 @@ class ArchiveCassiopeiaListener:
                     "last_heartbeat": datetime.now(timezone.utc).isoformat(),
                     "version": "2.0.0",
                     "capabilities": "archive_notion,archive_obsidian,analyze_content",
-                    "nlu_description": _NLU_DESCRIPTION,
                     "current_tasks": str(self._current_task_count),
                     "max_concurrency": "3",
                 },
             )
             await redis.expire(_HEALTH_KEY, _HEALTH_TTL)
+
+            # 2. 중앙 레지스트리에 NLU 설명 동적 등록
+            await redis.hset("agents:registry", _AGENT_NAME, json.dumps({
+                "name": _AGENT_NAME,
+                "lifecycle_type": "long_running",
+                "nlu_description": _NLU_DESCRIPTION,
+                "capabilities": ["notion", "obsidian", "archive"],
+                "registered_at": datetime.now(timezone.utc).isoformat(),
+            }, ensure_ascii=False))
+
         except Exception as exc:
-            logger.warning("[ArchiveCassiopeiaListener] heartbeat 업데이트 실패: %s", exc)
+            logger.warning("[ArchiveCassiopeiaListener] 헬스/레지스트리 업데이트 실패: %s", exc)

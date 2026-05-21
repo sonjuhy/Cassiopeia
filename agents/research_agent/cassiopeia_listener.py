@@ -23,7 +23,15 @@ logger = logging.getLogger("research_agent.cassiopeia_listener")
 _AGENT_NAME = "research-agent"
 _HEALTH_KEY = f"agent:{_AGENT_NAME}:health"
 _HEARTBEAT_INTERVAL: int = int(os.environ.get("HEARTBEAT_INTERVAL", "15"))
+_HTTP_REPORT_TIMEOUT: float = float(os.environ.get("HTTP_REPORT_TIMEOUT", "10.0"))
+_DISPATCH_TIMEOUT: float = float(os.environ.get("DISPATCH_TIMEOUT", "180.0"))
 _HEALTH_TTL: int = _HEARTBEAT_INTERVAL * 4
+
+_NLU_DESCRIPTION = (
+    "- research-agent: 웹 검색, 정보 수집, 조사를 수행할 때 사용합니다. "
+    "사용자의 질문에 대해 최신 정보를 검색하여 보고서를 작성합니다. "
+    "(actions: search, research, investigate)"
+)
 
 
 class ResearchCassiopeiaListener:
@@ -112,7 +120,14 @@ class ResearchCassiopeiaListener:
         try:
             logger.info("[ResearchCassiopeiaListener] 태스크 수신: task_id=%s action=%s", task_id, msg.action)
             raw = json.dumps(msg.payload, ensure_ascii=False)
-            await self._agent._handle_task(raw, self._cassiopeia_url)
+            
+            # 180초 타임아웃 적용
+            await asyncio.wait_for(
+                self._agent._handle_task(raw, self._cassiopeia_url),
+                timeout=_DISPATCH_TIMEOUT
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            logger.error("[ResearchCassiopeiaListener] 태스크 처리 시간 초과 task_id=%s", task_id)
         except asyncio.CancelledError:
             logger.warning("[ResearchCassiopeiaListener] 태스크 취소됨: task_id=%s", task_id)
             raise
@@ -140,9 +155,11 @@ class ResearchCassiopeiaListener:
             logger.info("[ResearchCassiopeiaListener] heartbeat 정상 종료")
 
     async def _update_health(self, status: str) -> None:
-        """agent:research-agent:health Hash 필드를 업데이트합니다."""
+        """agent:research-agent:health Hash 필드를 업데이트하고 중앙 레지스트리에 능력치를 동적으로 등록합니다."""
         try:
             redis = await self._ensure_redis()
+            
+            # 1. 헬스 체크 업데이트 (하트비트)
             await redis.hset(
                 _HEALTH_KEY,
                 mapping={
@@ -156,8 +173,18 @@ class ResearchCassiopeiaListener:
                 },
             )
             await redis.expire(_HEALTH_KEY, _HEALTH_TTL)
+
+            # 2. 중앙 레지스트리에 NLU 설명 동적 등록
+            await redis.hset("agents:registry", _AGENT_NAME, json.dumps({
+                "name": _AGENT_NAME,
+                "lifecycle_type": "long_running",
+                "nlu_description": _NLU_DESCRIPTION,
+                "capabilities": ["search", "research", "investigate"],
+                "registered_at": datetime.now(timezone.utc).isoformat(),
+            }, ensure_ascii=False))
+
         except Exception as exc:
-            logger.warning("[ResearchCassiopeiaListener] heartbeat 업데이트 실패: %s", exc)
+            logger.warning("[ResearchCassiopeiaListener] 헬스/레지스트리 업데이트 실패: %s", exc)
 
     async def run(self) -> None:
         """listen_tasks와 _heartbeat_loop를 동시에 실행합니다."""

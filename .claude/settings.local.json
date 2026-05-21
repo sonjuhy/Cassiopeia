@@ -29,7 +29,27 @@
       "Bash(npm test *)",
       "Bash(git commit -m ' *)",
       "Bash(git rm *)",
-      "Bash(git mv *)"
+      "Bash(git mv *)",
+      "Bash(git remote *)",
+      "Bash(git fetch *)",
+      "Bash(git worktree *)",
+      "Bash(git --no-optional-locks log --oneline -3)",
+      "Bash(git push *)",
+      "Bash(docker-compose up *)",
+      "Bash(docker run *)",
+      "PowerShell(docker run --rm -v \"C:\\\\WorkSpace\\\\Dev\\\\Python\\\\Cassiopeia\\\\redis\\\\entrypoint.sh:/entrypoint.sh:ro\" redis:7-alpine xxd /entrypoint.sh 2>&1)",
+      "Bash(git config *)",
+      "Bash(docker stop *)",
+      "Bash(docker rm *)",
+      "Bash(xxd)",
+      "Bash(xargs sed *)",
+      "Bash(New-Item -ItemType File -Force \"C:/WorkSpace/Dev/Python/Cassiopeia/shared_core/security/__init__.py\")",
+      "Bash(Out-Null)",
+      "Bash(Get-ChildItem -Path \"C:\\\\WorkSpace\\\\Dev\\\\Python\\\\Cassiopeia\" -Recurse -Force)",
+      "Bash(Select-Object -First 50)",
+      "Bash(Format-List FullName)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\WorkSpace\\\\Dev\\\\Python\\\\Cassiopeia\" -Recurse -Force -Directory | Select-Object -First 30 | ForEach-Object { $_.FullName })",
+      "PowerShell($f2 = \"C:\\\\Users\\\\SONJU_~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--WorkSpace-Dev-Python-Cassiopeia\\\\7d49dc62-ab1a-41e0-90fc-8362e53bdef3\\\\tasks\\\\b91nuaib9.output\"; $size = \\(Get-Item $f2\\).Length; Write-Output \"Size: $size bytes\"; Get-Content $f2 -Raw)"
     ]
   }
 }

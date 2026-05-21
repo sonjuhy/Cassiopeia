@@ -54,7 +54,7 @@ def main() -> None:
     vault_path: str | None = os.getenv("OBSIDIAN_VAULT_PATH")
     logger.info(f"로드된 경로: {vault_path}")  # 여기서 깨져서 나오는지 확인 필수
 
-    mode = os.environ.get("NOTION_MODE", "ephemeral").lower()
+    mode = (os.environ.get("NOTION_MODE") or os.environ.get("MODE") or "ephemeral").lower()
     if mode == "server":
         _run_server()
     else:
