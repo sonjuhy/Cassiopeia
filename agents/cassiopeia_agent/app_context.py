@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .marketplace_handler import MarketplaceHandler
     from .sandbox_tool import SandboxTool
     from .llm_gateway import LLMGatewayHandler
+    from .system_executor import SystemExecutor
 
 
 class _AppContext:
@@ -32,8 +33,10 @@ class _AppContext:
     redis_client: aioredis.Redis
     cassiopeia_client: CassiopeiaClient
     llm_gateway: LLMGatewayHandler | None = None
+    system_executor: SystemExecutor | None = None
     listen_task: asyncio.Task | None = None
     monitor_task: asyncio.Task | None = None
+    executor_task: asyncio.Task | None = None
 
 
 # 모듈 수준 싱글톤 — lifespan에서 각 필드를 채운다

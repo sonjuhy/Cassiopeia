@@ -3,6 +3,7 @@
 # FastAPI & ASGI
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
 
 # Pydantic v2
 pydantic>=2.7.0
@@ -14,7 +15,7 @@ python-dotenv>=1.0.1
 redis[hiredis]>=5.0.0
 
 # Agent messaging SDK
-cassiopeia-sdk>=0.1.0
+cassiopeia-sdk>=0.3.0
 
 # Google Gemini (Primary NLU)
 google-genai>=1.0.0

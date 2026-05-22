@@ -217,6 +217,39 @@ class StateManager:
         )
         await db.commit()
 
+    # ── 시크릿(API 키) 관리 ──────────────────────────────────────────────────
+
+    async def save_agent_secrets(self, agent_name: str, secrets: dict[str, str]) -> None:
+        """에이전트별 시크릿(API 키 등)을 암호화하여 Redis에 저장합니다."""
+        raw_json = json.dumps(secrets, ensure_ascii=False)
+        encrypted = self._cipher_suite.encrypt(raw_json.encode("utf-8")).decode("utf-8")
+        
+        key = f"agent:{agent_name}:secrets"
+        await self._redis.hset(key, mapping={"encrypted_secrets": encrypted})
+        # 시크릿은 별도의 만료 시간을 두지 않거나 매우 길게 설정 (영구 저장성)
+        logger.info("[StateManager] 에이전트 시크릿 저장 완료: %s", agent_name)
+
+    async def get_agent_secrets(self, agent_name: str) -> dict[str, str]:
+        """Redis에서 암호화된 에이전트 시크릿을 가져와 복호화합니다."""
+        key = f"agent:{agent_name}:secrets"
+        data = await self._redis.hgetall(key)
+        if not data or "encrypted_secrets" not in data:
+            return {}
+        
+        try:
+            encrypted = data["encrypted_secrets"]
+            decrypted = self._cipher_suite.decrypt(encrypted.encode("utf-8")).decode("utf-8")
+            return json.loads(decrypted)
+        except Exception as e:
+            logger.error("[StateManager] 시크릿 복호화 실패 (%s): %s", agent_name, e)
+            return {}
+
+    async def delete_agent_secrets(self, agent_name: str) -> None:
+        """에이전트 시크릿을 삭제합니다."""
+        key = f"agent:{agent_name}:secrets"
+        await self._redis.delete(key)
+        logger.info("[StateManager] 에이전트 시크릿 삭제 완료: %s", agent_name)
+
     # ── 유틸리티 및 상태 관리 ──────────────────────────────────────────────────
 
     async def update_task_state(self, task_id: str, fields: dict[str, Any]) -> None:

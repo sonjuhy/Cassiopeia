@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cassiopeia 에이전트 설정 위저드</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f7f6; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .container { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 100%; max-width: 500px; }
+        h1 { color: #333; font-size: 1.5rem; margin-bottom: 1.5rem; text-align: center; }
+        .form-group { margin-bottom: 1rem; }
+        label { display: block; margin-bottom: 0.5rem; font-weight: bold; color: #555; }
+        select, textarea, input { width: 100%; padding: 0.75rem; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; font-size: 1rem; }
+        textarea { height: 150px; font-family: monospace; }
+        button { width: 100%; padding: 0.75rem; background-color: #4A90E2; border: none; border-radius: 4px; color: white; font-size: 1rem; font-weight: bold; cursor: pointer; transition: background-color 0.2s; }
+        button:hover { background-color: #357ABD; }
+        .footer { margin-top: 1.5rem; text-align: center; font-size: 0.85rem; color: #888; }
+        #message { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; display: none; }
+        .success { background-color: #d4edda; color: #155724; display: block !important; }
+        .error { background-color: #f8d7da; color: #721c24; display: block !important; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚙️ Cassiopeia Setup</h1>
+        <div class="form-group">
+            <label for="agent_name">설정할 에이전트</label>
+            <select id="agent_name">
+                <option value="schedule-agent">일정 에이전트 (Google Calendar)</option>
+                <option value="research-agent">조사 에이전트 (Search API)</option>
+                <option value="archive_agent">아카이브 에이전트 (Notion)</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="admin_key">관리자 API 키 (X-API-Key)</label>
+            <input type="password" id="admin_key" placeholder="test_admin_key">
+        </div>
+        <div class="form-group">
+            <label for="secrets">설정 데이터 (JSON 형식)</label>
+            <textarea id="secrets" placeholder='{ "KEY": "VALUE" }'></textarea>
+        </div>
+        <button onclick="saveSecrets()">설정 저장하기</button>
+        <div id="message"></div>
+        <div class="footer">
+            &copy; 2026 Cassiopeia Project
+        </div>
+    </div>
+
+    <script>
+        async def saveSecrets() {
+            const agent = document.getElementById('agent_name').value;
+            const key = document.getElementById('admin_key').value;
+            const secretsRaw = document.getElementById('secrets').value;
+            const msgBox = document.getElementById('message');
+            
+            msgBox.className = '';
+            msgBox.innerText = '저장 중...';
+
+            try {
+                const secrets = JSON.parse(secretsRaw);
+                const response = await fetch(`/admin/secrets/${agent}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': key
+                    },
+                    body: JSON.stringify(secrets)
+                });
+
+                if (response.ok) {
+                    msgBox.innerText = '✅ 성공적으로 저장되었습니다!';
+                    msgBox.className = 'success';
+                } else {
+                    const err = await response.json();
+                    msgBox.innerText = `❌ 저장 실패: ${err.detail || response.statusText}`;
+                    msgBox.className = 'error';
+                }
+            } catch (e) {
+                msgBox.innerText = `❌ 입력 오류: ${e.message}`;
+                msgBox.className = 'error';
+            }
+        }
+    </script>
+</body>
+</html>

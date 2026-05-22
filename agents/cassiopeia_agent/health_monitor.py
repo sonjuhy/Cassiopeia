@@ -82,14 +82,12 @@ class HealthMonitor:
             lines: list[str] = []
             for name, data_raw in registry.items():
                 data = json.loads(data_raw)
+                nlu_desc = data.get("nlu_description", "").strip()
+                
                 if data.get("lifecycle_type") == "long_running":
                     health = await self._redis.hgetall(f"agent:{name}:health")
                     if not _is_heartbeat_recent(health.get("last_heartbeat", "")):
                         continue
-                    nlu_desc = health.get("nlu_description", "").strip()
-                else:
-                    # ephemeral 에이전트는 registry 등록 데이터에서 읽음
-                    nlu_desc = data.get("nlu_description", "").strip()
 
                 if nlu_desc:
                     lines.append(nlu_desc)
