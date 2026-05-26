@@ -68,129 +68,94 @@ async def _listen_gen(*messages: SdkAgentMessage) -> AsyncIterator[SdkAgentMessa
 # _handle_task — cassiopeia AgentMessage 수신 처리
 # ---------------------------------------------------------------------------
 
+HANDLE_TASK_TEST_CASES = [
+    {
+        "id": "list_schedules_success",
+        "mock_calendar": {"get_events": []},
+        "mock_brain": BrainDecision(action="list_schedules", params={"start_time": "2026-05-01T00:00:00", "end_time": "2026-05-31T23:59:59"}),
+        "msg_action": "list_schedules",
+        "msg_params": {"start_time": "2026-05-01T00:00:00", "end_time": "2026-05-31T23:59:59"},
+        "expected_status": "COMPLETED",
+        "expected_result_data": {"status": "success", "events": []}
+    },
+    {
+        "id": "add_schedule_success",
+        "mock_calendar": {"create_event": "new-event-123"},
+        "mock_brain": BrainDecision(action="add_schedule", params={"event": {"title": "테스트 미팅", "start_time": "2026-05-10T10:00:00", "end_time": "2026-05-10T11:00:00"}}),
+        "msg_action": "add_schedule",
+        "msg_params": {"event": {"title": "테스트 미팅", "start_time": "2026-05-10T10:00:00", "end_time": "2026-05-10T11:00:00"}},
+        "expected_status": "COMPLETED",
+        "expected_result_data": {"status": "success", "event_id": "new-event-123"}
+    },
+    {
+        "id": "modify_schedule_success",
+        "mock_calendar": {"update_event": True},
+        "mock_brain": BrainDecision(action="modify_schedule", params={"event_id": "existing-event", "event": {"title": "수정된 미팅", "start_time": "2026-05-10T14:00:00", "end_time": "2026-05-10T15:00:00"}}),
+        "msg_action": "modify_schedule",
+        "msg_params": {"event_id": "existing-event", "event": {"title": "수정된 미팅", "start_time": "2026-05-10T14:00:00", "end_time": "2026-05-10T15:00:00"}},
+        "expected_status": "COMPLETED",
+        "expected_result_data": {"status": "success"}
+    },
+    {
+        "id": "remove_schedule_success",
+        "mock_calendar": {"delete_event": True},
+        "mock_brain": BrainDecision(action="remove_schedule", params={"event_id": "event-to-delete"}),
+        "msg_action": "remove_schedule",
+        "msg_params": {"event_id": "event-to-delete"},
+        "expected_status": "COMPLETED",
+        "expected_result_data": {"status": "success"}
+    },
+    {
+        "id": "unknown_action_failed",
+        "mock_calendar": {},
+        "mock_brain": BrainDecision(action="unknown", params={}),
+        "msg_action": "unknown_calendar_action",
+        "msg_params": {},
+        "expected_status": "FAILED",
+        "expected_result_data": None
+    },
+    {
+        "id": "direct_response_success",
+        "mock_calendar": {},
+        "mock_brain": BrainDecision(action="direct_response", params={"message": "네, 2026년 일정입니다."}, suggested_reply="네, 2026년 일정입니다."),
+        "msg_action": "schedule_action",
+        "msg_params": {"user_request": "몇 년도 일정이니?"},
+        "expected_status": "COMPLETED",
+        "expected_result_data": {"status": "success", "action": "direct_response", "message": "네, 2026년 일정입니다."}
+    }
+]
+
 class TestHandleTask:
-    async def test_handle_list_schedules_success(self, agent, mock_calendar_provider):
-        mock_calendar_provider.get_events = AsyncMock(return_value=[])
-        # Mock Brain
-        mock_decision = BrainDecision(action="list_schedules", params={
-            "start_time": "2026-05-01T00:00:00",
-            "end_time": "2026-05-31T23:59:59",
-        })
-        agent.brain.analyze_task = AsyncMock(return_value=mock_decision)
-
-        msg = _make_sdk_message("list_schedules", params={
-            "start_time": "2026-05-01T00:00:00",
-            "end_time": "2026-05-31T23:59:59",
-        })
+    @pytest.mark.parametrize("case", HANDLE_TASK_TEST_CASES, ids=lambda c: c["id"])
+    async def test_handle_task_scenarios(self, agent, mock_calendar_provider, case):
+        # 1. Calendar Provider 동적 Mock 설정
+        for method, return_val in case.get("mock_calendar", {}).items():
+            setattr(mock_calendar_provider, method, AsyncMock(return_value=return_val))
+            
+        # 2. AgentBrain 결정 Mock 설정
+        agent.brain.analyze_task = AsyncMock(return_value=case["mock_brain"])
+        
+        # 3. 수신 메시지 생성
+        msg = _make_sdk_message(
+            case["msg_action"], 
+            task_id=f"t-{case['id']}", 
+            params=case.get("msg_params", {})
+        )
+        
+        # 4. 결과 보고 파이프라인 Mocking
         agent._report_result = AsyncMock()
-
+        
+        # 5. 에이전트 실행
         await agent._handle_task(msg, "http://cassiopeia:8001")
-
+        
+        # 6. 검증
         kwargs = agent._report_result.await_args.kwargs
-        assert kwargs["status"] == "COMPLETED"
-        assert kwargs["task_id"] == "t-001"
-
-    async def test_handle_add_schedule_success(self, agent, mock_calendar_provider):
-        mock_calendar_provider.create_event = AsyncMock(return_value="new-event-123")
-        # Mock Brain
-        mock_decision = BrainDecision(action="add_schedule", params={
-            "event": {
-                "title": "테스트 미팅",
-                "start_time": "2026-05-10T10:00:00",
-                "end_time": "2026-05-10T11:00:00",
-            }
-        })
-        agent.brain.analyze_task = AsyncMock(return_value=mock_decision)
-
-        msg = _make_sdk_message("add_schedule", task_id="t-add-01", params={
-            "event": {
-                "title": "테스트 미팅",
-                "start_time": "2026-05-10T10:00:00",
-                "end_time": "2026-05-10T11:00:00",
-            }
-        })
-        agent._report_result = AsyncMock()
-
-        await agent._handle_task(msg, "http://cassiopeia:8001")
-
-        kwargs = agent._report_result.await_args.kwargs
-        assert kwargs["status"] == "COMPLETED"
-        assert kwargs["task_id"] == "t-add-01"
-
-    async def test_handle_unknown_action_reports_failed(self, agent):
-        # Mock Brain returning unknown action
-        mock_decision = BrainDecision(action="unknown", params={})
-        agent.brain.analyze_task = AsyncMock(return_value=mock_decision)
-
-        msg = _make_sdk_message("unknown_calendar_action")
-        agent._report_result = AsyncMock()
-
-        await agent._handle_task(msg, "http://cassiopeia:8001")
-
-        kwargs = agent._report_result.await_args.kwargs
-        assert kwargs["status"] == "FAILED"
-
-    async def test_handle_task_extracts_task_id_from_payload(self, agent, mock_calendar_provider):
-        mock_calendar_provider.get_events = AsyncMock(return_value=[])
-        # Mock Brain
-        mock_decision = BrainDecision(action="list_schedules", params={
-            "start_time": "2026-05-01T00:00:00",
-            "end_time": "2026-05-31T23:59:59",
-        })
-        agent.brain.analyze_task = AsyncMock(return_value=mock_decision)
-
-        msg = _make_sdk_message("list_schedules", task_id="my-sched-99", params={
-            "start_time": "2026-05-01T00:00:00",
-            "end_time": "2026-05-31T23:59:59",
-        })
-        agent._report_result = AsyncMock()
-
-        await agent._handle_task(msg, "http://cassiopeia:8001")
-
-        kwargs = agent._report_result.await_args.kwargs
-        assert kwargs["task_id"] == "my-sched-99"
-
-    async def test_handle_modify_schedule_success(self, agent, mock_calendar_provider):
-        mock_calendar_provider.update_event = AsyncMock(return_value=True)
-        # Mock Brain
-        mock_decision = BrainDecision(action="modify_schedule", params={
-            "event_id": "existing-event",
-            "event": {
-                "title": "수정된 미팅",
-                "start_time": "2026-05-10T14:00:00",
-                "end_time": "2026-05-10T15:00:00",
-            }
-        })
-        agent.brain.analyze_task = AsyncMock(return_value=mock_decision)
-
-        msg = _make_sdk_message("modify_schedule", params={
-            "event_id": "existing-event",
-            "event": {
-                "title": "수정된 미팅",
-                "start_time": "2026-05-10T14:00:00",
-                "end_time": "2026-05-10T15:00:00",
-            }
-        })
-        agent._report_result = AsyncMock()
-
-        await agent._handle_task(msg, "http://cassiopeia:8001")
-
-        kwargs = agent._report_result.await_args.kwargs
-        assert kwargs["status"] == "COMPLETED"
-
-    async def test_handle_remove_schedule_success(self, agent, mock_calendar_provider):
-        mock_calendar_provider.delete_event = AsyncMock(return_value=True)
-        # Mock Brain
-        mock_decision = BrainDecision(action="remove_schedule", params={"event_id": "event-to-delete"})
-        agent.brain.analyze_task = AsyncMock(return_value=mock_decision)
-
-        msg = _make_sdk_message("remove_schedule", params={"event_id": "event-to-delete"})
-        agent._report_result = AsyncMock()
-
-        await agent._handle_task(msg, "http://cassiopeia:8001")
-
-        kwargs = agent._report_result.await_args.kwargs
-        assert kwargs["status"] == "COMPLETED"
+        assert kwargs["status"] == case["expected_status"]
+        assert kwargs["task_id"] == f"t-{case['id']}"
+        
+        if case["expected_result_data"] is not None:
+            for k, v in case["expected_result_data"].items():
+                assert kwargs["result_data"]["data"][k] == v
 
 
 # ---------------------------------------------------------------------------
