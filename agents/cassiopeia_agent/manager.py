@@ -24,7 +24,7 @@ from cassiopeia_sdk.tools import Tool
 
 from .auth import CLIENT_API_KEY
 from .health_monitor import HealthMonitor
-from shared_core.dispatch_auth import DispatchAuthError, verify_task
+from shared_core.dispatch_auth import DispatchAuthError, verify_task, sign_dispatch
 from .sandbox_tool import SandboxTool
 from .scheduler import ScheduledTaskRunner
 from .models import (
@@ -221,16 +221,28 @@ class CassiopeiaManager:
         return tasks
 
     async def listen_tasks(self) -> None:
-        """메인 루프: cassiopeia Pub/Sub에서 작업을 수신합니다."""
+        """메인 루프: cassiopeia 및 orchestra Pub/Sub에서 작업을 수신합니다."""
         logger.info("[CassiopeiaManager] 메인 루프 시작")
         await self._cassiopeia.connect()
-        try:
-            async for msg in self._cassiopeia.listen():
+
+        redis_url = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379").replace(
+            "localhost", "127.0.0.1"
+        )
+        self._orchestra = CassiopeiaClient(agent_id="orchestra", redis_url=redis_url)
+        await self._orchestra.connect()
+
+        async def _listen_client(client: CassiopeiaClient, name: str):
+            logger.info(f"[CassiopeiaManager] {name} 채널 리스너 시작")
+            async for msg in client.listen():
                 task: CassiopeiaTask = dict(msg.payload)
                 action: str = getattr(msg, "action", "user_request")
 
                 if action == "llm_call":
                     asyncio.create_task(self._route_message(action, task))
+                    continue
+
+                if action == "agent_result":
+                    await self.receive_agent_result(task)
                     continue
 
                 try:
@@ -240,10 +252,17 @@ class CassiopeiaManager:
                     await self._push_to_dlq("INVALID_SIGNATURE", task.get("task_id", "unknown"), {"message": str(exc)})
                     continue
                 asyncio.create_task(self._safe_process_task(task))
+
+        try:
+            await asyncio.gather(
+                _listen_client(self._cassiopeia, "cassiopeia"),
+                _listen_client(self._orchestra, "orchestra")
+            )
         except asyncio.CancelledError:
             pass
         finally:
             await self._cassiopeia.disconnect()
+            await self._orchestra.disconnect()
 
     async def _route_message(self, action: str, payload: dict) -> None:
         if action == "llm_call":
@@ -356,14 +375,14 @@ class CassiopeiaManager:
         result = await self._execute_agent_task(agent_name, dispatch_task_id, dispatch, timeout)
         await self._handle_agent_result(result, task, False)
 
-    async def wait_for_result(self, task_id: str, timeout: int = 600) -> dict[str, Any]:
+    async def wait_for_result(self, task_id: str, timeout: int = 600, agent_name: str | None = None) -> dict[str, Any]:
         key = f"{_RESULTS_KEY_PREFIX}{task_id}"
         remaining = timeout
         while remaining > 0:
             res = await self._redis.blpop(key, timeout=min(_BLPOP_TIMEOUT, remaining))
             if res: return json.loads(res[1])
             remaining -= _BLPOP_TIMEOUT
-        failed = {"status": "FAILED", "task_id": task_id, "error": {"code": "TIMEOUT", "message": "응답 없음", "traceback": None}}
+        failed = {"status": "FAILED", "task_id": task_id, "agent": agent_name, "error": {"code": "TIMEOUT", "message": "응답 없음", "traceback": None}}
         await self._push_to_dlq("timeout", task_id, failed["error"])
         return failed
 
@@ -410,9 +429,10 @@ class CassiopeiaManager:
                 return await self._run_cassiopeia_internal_task(task_id, dispatch["action"], dispatch["params"])
             return await self._run_sandbox_task(task_id, dispatch["params"])
         dispatch = await self._enrich_dispatch_with_secrets(agent_name, dispatch)
+        signed_dispatch = sign_dispatch(dict(dispatch))
         await self._redis.hset(f"agent:{agent_name}:current_task", mapping={"task_id": dispatch["task_id"], "action": dispatch["action"], "started_at": datetime.now(timezone.utc).isoformat()})
-        await self._cassiopeia.send_message(action=dispatch["action"], payload=dict(dispatch), receiver=agent_name)
-        try: return await self.wait_for_result(task_id, timeout=timeout)
+        await self._cassiopeia.send_message(action=dispatch["action"], payload=signed_dispatch, receiver=agent_name)
+        try: return await self.wait_for_result(task_id, timeout=timeout, agent_name=agent_name)
         finally: await self._redis.delete(f"agent:{agent_name}:current_task")
 
     async def _enrich_dispatch_with_secrets(self, agent_name: str, dispatch: DispatchMessage) -> DispatchMessage:

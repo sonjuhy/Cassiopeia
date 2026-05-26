@@ -85,3 +85,18 @@ def verify_task(task: dict[str, Any]) -> None:
         raise DispatchAuthError(
             f"dispatch 메시지 서명 검증 실패. task_id={task.get('task_id')}"
         )
+
+
+def sign_dispatch(dispatch: dict[str, Any]) -> dict[str, Any]:
+    """SDK 호환용 전체 페이로드 서명 함수"""
+    secret = _secret()
+    if not secret:
+        return dispatch
+    body = {k: v for k, v in dispatch.items() if k != _HMAC_FIELD}
+    sig = hmac.new(
+        secret,
+        json.dumps(body, sort_keys=True, ensure_ascii=False).encode(),
+        hashlib.sha256
+    ).hexdigest()
+    return {**dispatch, _HMAC_FIELD: sig}
+

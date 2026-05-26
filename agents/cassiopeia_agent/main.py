@@ -101,7 +101,7 @@ def _validate_callback_url(url: str) -> None:
 
 from shared_core.llm import OllamaManager
 from shared_core.agent_logger import setup_logging
-from shared_core.dispatch_auth import sign_task, verify_task, DispatchAuthError
+from shared_core.dispatch_auth import sign_task, verify_task, DispatchAuthError, sign_dispatch
 
 from .app_context import ctx
 from .auth import CLIENT_API_KEY, verify_admin_key, verify_client_key
@@ -380,6 +380,8 @@ class RegisterAgentBody(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
     lifecycle_type: str = Field(default="long_running", max_length=50)
     nlu_description: str = Field(default="", max_length=2000)
+    permission_preset: str = Field(default="standard", max_length=50)
+    allow_llm_access: bool | None = Field(default=None)
 
 
 class HeartbeatBody(BaseModel):
@@ -744,7 +746,7 @@ async def direct_dispatch(body: DirectDispatchBody) -> dict[str, Any]:
     }
     await ctx.cassiopeia_client.send_message(
         action=body.action,
-        payload=dispatch_msg,
+        payload=sign_dispatch(dispatch_msg),
         receiver=body.agent_name,
     )
 
@@ -773,6 +775,8 @@ async def register_agent(body: RegisterAgentBody) -> dict[str, Any]:
         body.capabilities,
         lifecycle_type=body.lifecycle_type,
         nlu_description=body.nlu_description,
+        permission_preset=body.permission_preset,
+        allow_llm_access=body.allow_llm_access,
     )
     return {"status": "registered", "agent_name": body.agent_name}
 
