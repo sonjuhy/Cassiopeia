@@ -150,6 +150,7 @@ venv.bak/
 
 # Rope project settings
 .ropeproject
+google-credentials.json
 
 # mkdocs documentation
 /site
