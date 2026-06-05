@@ -28,7 +28,8 @@ from shared_core.dispatch_auth import DispatchAuthError, verify_task, sign_dispa
 from .sandbox_tool import SandboxTool
 from .scheduler import ScheduledTaskRunner
 from .models import (
-    AGENT_TIMEOUT_MAP,
+    AGENT_TIMEOUT_OVERRIDES_MAP,
+    DEFAULT_AGENT_TIMEOUT,
     RETRYABLE_ERROR_CODES,
     AgentResult,
     CommAgentMessage,
@@ -84,6 +85,25 @@ def _tool_parameters_for(reg_data: dict[str, Any]) -> dict[str, Any]:
     if isinstance(schema, dict) and schema:
         return schema
     return dict(_GENERIC_PARAMS_GUIDE)
+
+
+def _resolve_timeout(
+    agent_name: str,
+    reg_data: dict[str, Any],
+    overrides: dict[str, int] = AGENT_TIMEOUT_OVERRIDES_MAP,
+) -> int:
+    """에이전트 작업 타임아웃(초)을 결정합니다.
+
+    우선순위: 운영자 오버라이드(env) > 에이전트 선언(default_timeout) > 전역 기본값.
+    어느 단계에서도 에이전트 이름을 코드에 하드코딩하지 않습니다.
+    """
+    override = overrides.get(agent_name)
+    if isinstance(override, int) and override > 0:
+        return override
+    declared = reg_data.get("default_timeout")
+    if isinstance(declared, int) and declared > 0:
+        return declared
+    return DEFAULT_AGENT_TIMEOUT
 
 
 # Redis 설정
@@ -356,7 +376,9 @@ class CassiopeiaManager:
             await self._send_agent_unavailable_error(task, agent_name, reason)
             return
 
-        timeout = AGENT_TIMEOUT_MAP.get(agent_name, 300)
+        reg_raw = await self._redis.hget("agents:registry", agent_name)
+        reg_data = json.loads(reg_raw) if reg_raw else {}
+        timeout = _resolve_timeout(agent_name, reg_data)
         # 중요 파괴적 작업은 승인 요구 (기존 로직 유지)
         needs_approval = _requires_approval(action, False)
         

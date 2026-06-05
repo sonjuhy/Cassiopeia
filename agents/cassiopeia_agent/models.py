@@ -124,32 +124,32 @@ class CommAgentMessage(TypedDict):
     progress_percent: int | None    # None = 최종 결과, 0~99 = 진행 중
 
 
-def _build_timeout_map() -> dict[str, int]:
-    """에이전트별 기본 타임아웃 맵을 반환합니다.
-    AGENT_TIMEOUT_OVERRIDES 환경변수로 개별 재정의 가능 (예: "archive_agent:900,file_agent:180").
+# 모든 에이전트에 공통 적용되는 전역 기본 타임아웃(초).
+# 에이전트가 register() 로 default_timeout 을 선언하지 않았고, 운영자 오버라이드도
+# 없을 때 사용된다. 지휘자는 에이전트 이름을 코드에 박지 않는다.
+DEFAULT_AGENT_TIMEOUT: int = int(os.environ.get("DEFAULT_AGENT_TIMEOUT", "300"))
+
+
+def _build_timeout_overrides() -> dict[str, int]:
+    """운영자 타임아웃 오버라이드를 환경변수에서 파싱합니다.
+
+    AGENT_TIMEOUT_OVERRIDES="archive_agent:900,file_agent:180" 형식.
+    에이전트 이름을 코드에 하드코딩하지 않으며, 전적으로 운영 환경 설정에서만
+    온다(특정 에이전트에 대한 운영자 의도가 에이전트 자기 선언보다 우선).
     """
-    base: dict[str, int] = {
-        "archive_agent": 300,
-        "research_agent": 300,
-        "calendar_agent": 60,
-        "file_agent": 120,
-        "communication_agent": 30,
-        "sandbox_agent": 60,
-        "agent_builder": 120,
-    }
+    overrides: dict[str, int] = {}
     for entry in os.environ.get("AGENT_TIMEOUT_OVERRIDES", "").split(","):
         entry = entry.strip()
         if ":" in entry:
             name, val = entry.split(":", 1)
             try:
-                base[name.strip()] = int(val.strip())
+                overrides[name.strip()] = int(val.strip())
             except ValueError:
                 pass
-    return base
+    return overrides
 
-# 에이전트 레지스트리: 에이전트 이름 → 기본 timeout(초)
-# 환경변수 AGENT_TIMEOUT_OVERRIDES="agent_name:seconds,..." 로 개별 재정의 가능
-AGENT_TIMEOUT_MAP: dict[str, int] = _build_timeout_map()
+# 운영자 오버라이드 맵 (에이전트 이름 → timeout 초). 비어 있을 수 있다.
+AGENT_TIMEOUT_OVERRIDES_MAP: dict[str, int] = _build_timeout_overrides()
 
 # 재시도 가능한 에러 코드
 RETRYABLE_ERROR_CODES: frozenset[str] = frozenset({

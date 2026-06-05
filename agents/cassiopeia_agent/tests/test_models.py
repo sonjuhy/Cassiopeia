@@ -9,12 +9,13 @@ import pytest
 from pydantic import ValidationError
 
 from agents.cassiopeia_agent.models import (
-    AGENT_TIMEOUT_MAP,
+    AGENT_TIMEOUT_OVERRIDES_MAP,
+    DEFAULT_AGENT_TIMEOUT,
     NLUMetadata,
     NLU_CONFIDENCE_THRESHOLD,
     PlanStep,
     PlanStepMetadata,
-    _build_timeout_map,
+    _build_timeout_overrides,
 )
 
 
@@ -48,27 +49,30 @@ class TestNLUMetadata:
 
 
 
-class TestAgentTimeoutMap:
-    def test_default_values(self):
-        assert AGENT_TIMEOUT_MAP["archive_agent"] == 300
-        assert AGENT_TIMEOUT_MAP["calendar_agent"] == 60
+class TestAgentTimeoutOverrides:
+    def test_default_global_timeout(self):
+        # 전역 기본값만 존재하며, 특정 에이전트 이름은 코드에 박혀 있지 않다.
+        assert DEFAULT_AGENT_TIMEOUT == 300
+
+    def test_no_hardcoded_agent_names(self):
+        # 오버라이드를 설정하지 않으면 어떤 에이전트 이름도 맵에 없다.
+        assert _build_timeout_overrides() == {}
 
     def test_env_override(self, monkeypatch):
         monkeypatch.setenv("AGENT_TIMEOUT_OVERRIDES", "archive_agent:900,file_agent:180")
-        result = _build_timeout_map()
+        result = _build_timeout_overrides()
         assert result["archive_agent"] == 900
         assert result["file_agent"] == 180
-        assert result["calendar_agent"] == 60  # unchanged
+        assert "calendar_agent" not in result  # 선언하지 않은 이름은 없음
 
     def test_env_override_invalid_value_ignored(self, monkeypatch):
         monkeypatch.setenv("AGENT_TIMEOUT_OVERRIDES", "archive_agent:notanumber")
-        result = _build_timeout_map()
-        assert result["archive_agent"] == 300  # unchanged
+        result = _build_timeout_overrides()
+        assert "archive_agent" not in result  # 잘못된 값은 무시
 
     def test_env_override_empty(self, monkeypatch):
         monkeypatch.setenv("AGENT_TIMEOUT_OVERRIDES", "")
-        result = _build_timeout_map()
-        assert result["archive_agent"] == 300
+        assert _build_timeout_overrides() == {}
 
 
 # ── NLU_CONFIDENCE_THRESHOLD ──────────────────────────────────────────────────
