@@ -382,6 +382,10 @@ class RegisterAgentBody(BaseModel):
     nlu_description: str = Field(default="", max_length=2000)
     permission_preset: str = Field(default="standard", max_length=50)
     allow_llm_access: bool | None = Field(default=None)
+    # 자기 기술(self-describing) 라우팅 메타데이터 — 지휘자의 에이전트별 하드코딩 제거 기반.
+    params_schema: dict[str, Any] | None = Field(default=None)
+    default_timeout: int | None = Field(default=None, ge=1, le=86400)
+    routing: dict[str, Any] | None = Field(default=None)
 
 
 class HeartbeatBody(BaseModel):
@@ -777,6 +781,9 @@ async def register_agent(body: RegisterAgentBody) -> dict[str, Any]:
         nlu_description=body.nlu_description,
         permission_preset=body.permission_preset,
         allow_llm_access=body.allow_llm_access,
+        params_schema=body.params_schema,
+        default_timeout=body.default_timeout,
+        routing=body.routing,
     )
     return {"status": "registered", "agent_name": body.agent_name}
 

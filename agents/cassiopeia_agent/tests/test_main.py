@@ -217,6 +217,21 @@ class TestAgentManagement:
         assert resp.status_code == 201
         assert resp.json()["status"] == "registered"
 
+    async def test_register_agent_persists_self_describing_metadata(self, async_client, fake_redis):
+        """등록 API가 self-describing 메타데이터를 레지스트리에 영속화해야 한다."""
+        resp = await async_client.post("/agents", json={
+            "agent_name": "weather_agent",
+            "capabilities": ["get_weather"],
+            "params_schema": {"action": "get_weather", "params": {"city": "도시명"}},
+            "default_timeout": 90,
+            "routing": {"role": "communication", "platforms": ["slack"]},
+        })
+        assert resp.status_code == 201
+        data = json.loads(await fake_redis.hget("agents:registry", "weather_agent"))
+        assert data["params_schema"] == {"action": "get_weather", "params": {"city": "도시명"}}
+        assert data["default_timeout"] == 90
+        assert data["routing"] == {"role": "communication", "platforms": ["slack"]}
+
     async def test_deregister_agent(self, async_client, fake_redis):
         await _register_agent(fake_redis, "to_remove")
         resp = await async_client.delete("/agents/to_remove")
