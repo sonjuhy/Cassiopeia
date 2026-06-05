@@ -223,11 +223,16 @@ async def _startup(app: FastAPI):  # noqa: C901
 
     # 기본 시스템 에이전트만 최소한으로 등록 (나머지는 하위 에이전트가 기동 시 자동 등록)
     await ctx.health_monitor.register_agent(
-        "cassiopeia_agent", 
+        "cassiopeia_agent",
         ["get_agent_list", "get_system_status", "get_queue_status"],
         lifecycle_type="internal",
         nlu_description="- cassiopeia_agent: 시스템 상태 조회 및 관리 전용.",
-        permission_preset="standard"
+        permission_preset="standard",
+        # 내장 에이전트도 라우팅 힌트를 코드 분기가 아닌 선언으로 제공한다.
+        params_schema={
+            "action": "get_agent_list, get_system_status, get_queue_status 등",
+            "params": {},
+        },
     )
 
     ctx.cassiopeia_client = CassiopeiaClient(agent_id="cassiopeia-api", redis_url=redis_url)

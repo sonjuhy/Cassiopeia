@@ -67,6 +67,25 @@ def _requires_approval(action: str, llm_flag: bool) -> bool:
     return action in APPROVAL_REQUIRED_ACTIONS or llm_flag
 
 
+# LLM 라우팅 시 에이전트가 params_schema 를 선언하지 않은 경우 사용하는 일반 가이드.
+_GENERIC_PARAMS_GUIDE: dict[str, str] = {
+    "action": "수행할 작업 명칭",
+    "params": "작업 파라미터 (dict)",
+}
+
+
+def _tool_parameters_for(reg_data: dict[str, Any]) -> dict[str, Any]:
+    """레지스트리에 선언된 params_schema 를 라우팅 도구 파라미터로 반환합니다.
+
+    지휘자는 에이전트 이름을 비교하지 않습니다. 에이전트가 register() 로 선언한
+    params_schema 가 있으면 그것을 쓰고, 없으면 일반 가이드를 복사해 돌려줍니다.
+    """
+    schema = reg_data.get("params_schema")
+    if isinstance(schema, dict) and schema:
+        return schema
+    return dict(_GENERIC_PARAMS_GUIDE)
+
+
 # Redis 설정
 _CASSIOPEIA_TASKS_KEY = "agent:cassiopeia:tasks"
 _RESULTS_KEY_PREFIX = "cassiopeia:results:"
@@ -299,35 +318,17 @@ class CassiopeiaManager:
         tools = []
         for agent_id, info in agents_health.items():
             if info["activity"] == "OFFLINE": continue
-            
+
             reg_raw = await self._redis.hget("agents:registry", agent_id)
-            desc = "전문 에이전트"
-            if reg_raw:
-                reg_data = json.loads(reg_raw)
-                desc = reg_data.get("nlu_description") or reg_data.get("capabilities", desc)
+            reg_data = json.loads(reg_raw) if reg_raw else {}
+            desc = reg_data.get("nlu_description") or reg_data.get("capabilities") or "전문 에이전트"
 
-            # 특수 처리: 에이전트 유형에 따른 파라미터 가이드 최적화
-            if agent_id == "sandbox_agent":
-                parameters = {
-                    "action": "execute_code",
-                    "params": {
-                        "language": "python, javascript, bash 중 선택",
-                        "code": "실행할 소스 코드",
-                        "stdin": "표준 입력값 (필요 시)"
-                    }
-                }
-            elif agent_id == "cassiopeia_agent":
-                parameters = {
-                    "action": "get_agent_list, get_system_status, get_queue_status 등",
-                    "params": {}
-                }
-            else:
-                parameters = {"action": "수행할 작업 명칭", "params": "작업 파라미터 (dict)"}
-
+            # 파라미터 가이드는 에이전트가 선언한 params_schema 에서만 나온다.
+            # (에이전트 이름에 따른 특수 분기 없음 — 완전 독립)
             tools.append(Tool(
                 name=agent_id,
                 description=desc,
-                parameters=parameters
+                parameters=_tool_parameters_for(reg_data),
             ))
 
         # 2. SDK AgentBrain을 이용한 라우팅 결정
