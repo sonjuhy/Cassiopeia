@@ -118,3 +118,18 @@ class TestResolveCommReceiver:
     def test_handles_missing_routing_gracefully(self):
         registry = {"legacy": {"name": "legacy"}}  # routing 키 없음
         assert _resolve_comm_receiver("slack", registry, default="dflt") == "dflt"
+
+
+# ── NLU 코디네이터 프롬프트 비종속성 ──────────────────────────────────────────
+
+class TestCoordinatorPromptIndependence:
+    def test_prompt_has_no_hardcoded_builtin_agent_names(self):
+        """지휘자 시스템 프롬프트는 특정 내장 에이전트 이름을 박아두지 않아야 한다.
+
+        라우팅 후보는 런타임에 레지스트리에서 동적으로 주입되는 도구 목록에서만 와야 한다.
+        """
+        from agents.cassiopeia_agent.manager import _COORDINATOR_CAPABILITIES
+
+        prompt = _COORDINATOR_CAPABILITIES.lower()
+        for forbidden in ("archive_agent", "research_agent", "research-agent", "file_agent", "노션"):
+            assert forbidden.lower() not in prompt, f"프롬프트에 하드코딩된 토큰: {forbidden}"

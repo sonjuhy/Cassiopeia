@@ -147,21 +147,25 @@ _LLM_MODEL: str = os.environ.get("NLU_LLM_MODEL", "gemini-2.5-flash")
 _LLM_TEMPERATURE: float = float(os.environ.get("NLU_LLM_TEMPERATURE", "0.2"))
 
 
-def _build_platform_comm_queue() -> dict[str, str]:
-    base: dict[str, str] = {
-        "slack": "agent:communication:tasks",
-        "discord": "agent:communication:discord:tasks",
-        "telegram": "agent:communication:telegram:tasks",
-    }
-    for entry in os.environ.get("PLATFORM_COMM_QUEUES", "").split(","):
-        entry = entry.strip()
-        if "=" in entry:
-            platform, queue_key = entry.split("=", 1)
-            base[platform.strip()] = queue_key.strip()
-    return base
+# 지휘자 NLU 시스템 프롬프트.
+# 특정 내장 에이전트 이름을 박지 않는다 — 라우팅 후보는 런타임에 레지스트리에서
+# 동적으로 주입되는 도구 목록에서만 온다. 예시도 자리표시자로만 기술한다.
+_COORDINATOR_CAPABILITIES = """당신은 카시오페아 시스템의 통합 지휘자입니다.
+당신의 주 임무는 사용자의 요청을 분석하여, 이를 처리할 수 있는 가장 적절한 '에이전트(도구)'를 선택하는 것입니다.
 
-_PLATFORM_COMM_QUEUE: dict[str, str] = _build_platform_comm_queue()
-_DEFAULT_COMM_QUEUE: str = os.environ.get("DEFAULT_COMM_QUEUE", "agent:communication:tasks")
+[반드시 지켜야 할 규칙]
+1. 'action' 필드에는 반드시 '주어진 도구 목록'에 있는 '도구 이름(에이전트 ID)' 중 하나를 정확히 기입해야 합니다. 목록에 없는 이름을 지어내지 마십시오.
+2. 각 도구 설명에 나열된 '세부 액션'을 'action' 필드에 직접 적지 마십시오. 세부 액션은 'params' 내부의 'action' 필드에 담아야 합니다.
+3. 어떤 작업을 처리할 전용 도구가 목록에 있다면, 코드를 직접 짜서 해결하려 하지 말고 반드시 그 전용 도구를 선택하십시오.
+4. 단순 인사나 일상 대화는 'direct_response'를 사용하십시오.
+5. 절대로 존재하지 않는 ID(UUID 형식)를 지어내거나 추측하지 마십시오. ID를 모를 때는 해당 필드를 생략하십시오. 하위 에이전트가 이름으로 검색할 것입니다.
+
+[응답 형식 예시] (도구 이름과 세부 액션은 실제 주어진 도구 목록에서 가져오십시오)
+{
+  "action": "<도구 목록에 있는 에이전트 ID>",
+  "params": {"action": "<그 에이전트의 세부 액션>", "params": {}},
+  "reasoning": "<이 도구를 고른 이유>"
+}"""
 
 
 def _build_dispatch_message(
@@ -233,24 +237,8 @@ class CassiopeiaManager:
         # SDK AgentBrain 초기화
         self.brain = AgentBrain(
             agent_name="cassiopeia_coordinator",
-            capabilities="""당신은 카시오페아 시스템의 통합 지휘자입니다. 
-당신의 주 임무는 사용자의 요청을 분석하여, 이를 처리할 수 있는 가장 적절한 '에이전트(도구)'를 선택하는 것입니다.
-
-[반드시 지켜야 할 규칙]
-1. 'action' 필드에는 반드시 당신에게 주어진 '도구 이름(에이전트 ID)' 중 하나를 정확하게 기입해야 합니다. (예: 'archive_agent', 'research-agent' 등)
-2. 에이전트 설명에 나열된 '세부 액션(예: list_databases, search)'을 'action' 필드에 직접 적지 마십시오. 세부 액션은 'params' 내부의 'action' 필드에 담아야 합니다.
-3. 특정 도구(예: Notion, 검색, 일정 관리 등)의 전용 에이전트가 존재한다면, 코드를 짜서 해결하려 하지 말고 반드시 해당 전용 에이전트를 선택하십시오. (예: 노션 작업은 무조건 archive_agent)
-4. 단순 인사나 일상 대화는 'direct_response'를 사용하십시오.
-5. 절대로 존재하지 않는 ID(UUID 형식)를 지어내거나 추측하지 마십시오. ID를 모를 때는 해당 필드를 생략하십시오. 하위 에이전트가 이름으로 검색할 것입니다.
-
-[응답 예시]
-요청: "노션 데이터베이스 목록 보여줘"
-응답: {
-  "action": "archive_agent", 
-  "params": {"action": "list_databases", "params": {}}, 
-  "reasoning": "노션 관련 요청이므로 archive_agent를 선택합니다."
-}""",
-            backend="gateway", 
+            capabilities=_COORDINATOR_CAPABILITIES,
+            backend="gateway",
             llm_caller=self._direct_llm_caller,
             config=AgentBrainConfig(max_retries=2, confidence_threshold=0.7)
         )
