@@ -15,10 +15,15 @@ from unittest.mock import AsyncMock
 from agents.cassiopeia_agent.manager import (
     CassiopeiaManager,
     _GENERIC_PARAMS_GUIDE,
+    _resolve_comm_receiver,
     _resolve_timeout,
     _tool_parameters_for,
 )
 from agents.cassiopeia_agent.models import DEFAULT_AGENT_TIMEOUT
+
+
+def _comm(name, platforms):
+    return {name: {"name": name, "routing": {"role": "communication", "platforms": platforms}}}
 
 
 # ── _tool_parameters_for: params_schema 레지스트리 기반화 ──────────────────────
@@ -77,3 +82,39 @@ class TestResolveTimeout:
         """이전에 하드코딩되던 이름(communication_agent 등)도 특별 취급 없이 전역 기본값."""
         assert _resolve_timeout("communication_agent", {}, overrides={}) == DEFAULT_AGENT_TIMEOUT
         assert _resolve_timeout("sandbox_agent", {}, overrides={}) == DEFAULT_AGENT_TIMEOUT
+
+
+# ── _resolve_comm_receiver: routing 기반 커뮤니케이션 수신자 ───────────────────
+
+class TestResolveCommReceiver:
+    def test_matches_declared_platform(self):
+        registry = _comm("discord_bridge", ["discord"])
+        assert _resolve_comm_receiver("discord", registry, default="fallback") == "discord_bridge"
+
+    def test_picks_right_agent_among_many(self):
+        registry = {}
+        registry.update(_comm("slack_bot", ["slack"]))
+        registry.update(_comm("tg_bot", ["telegram"]))
+        assert _resolve_comm_receiver("telegram", registry, default="fallback") == "tg_bot"
+
+    def test_wildcard_platform_acts_as_catch_all(self):
+        registry = _comm("omni_comm", ["*"])
+        assert _resolve_comm_receiver("whatsapp", registry, default="fallback") == "omni_comm"
+
+    def test_explicit_platform_beats_wildcard(self):
+        registry = {}
+        registry.update(_comm("omni_comm", ["*"]))
+        registry.update(_comm("slack_bot", ["slack"]))
+        assert _resolve_comm_receiver("slack", registry, default="fallback") == "slack_bot"
+
+    def test_falls_back_to_default_when_no_comm_agent(self):
+        registry = {"file_agent": {"name": "file_agent", "routing": {"role": "worker"}}}
+        assert _resolve_comm_receiver("slack", registry, default="communication_agent") == "communication_agent"
+
+    def test_ignores_non_communication_role(self):
+        registry = {"x": {"routing": {"role": "worker", "platforms": ["slack"]}}}
+        assert _resolve_comm_receiver("slack", registry, default="dflt") == "dflt"
+
+    def test_handles_missing_routing_gracefully(self):
+        registry = {"legacy": {"name": "legacy"}}  # routing 키 없음
+        assert _resolve_comm_receiver("slack", registry, default="dflt") == "dflt"

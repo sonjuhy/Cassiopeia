@@ -106,6 +106,35 @@ def _resolve_timeout(
     return DEFAULT_AGENT_TIMEOUT
 
 
+# 레지스트리에 적합한 커뮤니케이션 에이전트가 없을 때 사용하는 기본 수신자.
+_DEFAULT_COMM_RECEIVER: str = os.environ.get("DEFAULT_COMM_RECEIVER", "communication_agent")
+
+
+def _resolve_comm_receiver(
+    source: str,
+    registry: dict[str, dict[str, Any]],
+    default: str = _DEFAULT_COMM_RECEIVER,
+) -> str:
+    """사용자 응답을 전달할 커뮤니케이션 에이전트 이름을 레지스트리에서 찾습니다.
+
+    routing.role == "communication" 인 에이전트 중 routing.platforms 에 source 가
+    포함된 에이전트를 선택합니다. platforms 에 "*" 가 있으면 모든 플랫폼을 받는
+    catch-all 로 간주하되, 특정 플랫폼을 명시한 에이전트가 우선합니다. 적합한
+    에이전트가 없으면 default 를 반환합니다. (에이전트 이름 하드코딩 없음)
+    """
+    wildcard_match: str | None = None
+    for name, data in registry.items():
+        routing = data.get("routing") or {}
+        if routing.get("role") != "communication":
+            continue
+        platforms = routing.get("platforms") or []
+        if source in platforms:
+            return name
+        if "*" in platforms and wildcard_match is None:
+            wildcard_match = name
+    return wildcard_match or default
+
+
 # Redis 설정
 _CASSIOPEIA_TASKS_KEY = "agent:cassiopeia:tasks"
 _RESULTS_KEY_PREFIX = "cassiopeia:results:"
@@ -439,7 +468,7 @@ class CassiopeiaManager:
         await self._redis.setex(f"slack:task:{approval_id}:context", 3600, json.dumps(task["requester"], ensure_ascii=False))
         msg: CommAgentMessage = {"task_id": approval_id, "content": f"승인 필요: {result.get('result_data', {}).get('summary')}", "requires_user_approval": True, "agent_name": result.get("agent")}
         source = task.get("source", "slack")
-        await self._cassiopeia.send_message(action="request_approval", payload={**msg, "platform": source}, receiver=self._get_comm_receiver(source))
+        await self._cassiopeia.send_message(action="request_approval", payload={**msg, "platform": source}, receiver=await self._get_comm_receiver(source))
         res = await self._redis.blpop(f"{_APPROVAL_KEY_PREFIX}{approval_id}", timeout=_APPROVAL_TIMEOUT_SEC)
         return json.loads(res[1]).get("action") == "approve" if res else False
 
@@ -487,8 +516,16 @@ class CassiopeiaManager:
         except Exception as exc:
             return {"task_id": task_id, "status": "FAILED", "agent": "sandbox_agent", "result_data": {}, "error": {"code": "ERROR", "message": str(exc)}}
 
-    def _get_comm_receiver(self, source: str) -> str:
-        return {"discord": "discord_communication_agent", "telegram": "telegram_communication_agent"}.get(source, "communication_agent")
+    async def _get_comm_receiver(self, source: str) -> str:
+        """레지스트리의 routing 메타데이터로 source 플랫폼의 커뮤니케이션 수신자를 해석합니다."""
+        registry_raw = await self._redis.hgetall("agents:registry")
+        registry: dict[str, dict[str, Any]] = {}
+        for name, data_raw in registry_raw.items():
+            try:
+                registry[name] = json.loads(data_raw)
+            except (ValueError, TypeError):
+                continue
+        return _resolve_comm_receiver(source, registry)
 
     async def _send_to_comm_agent(self, task: CassiopeiaTask, content: str, requires_approval: bool, agent_name: str) -> None:
         req = task.get("requester", {})
@@ -497,7 +534,7 @@ class CassiopeiaManager:
         if session_id: await self._state.add_message(session_id, req.get("user_id", "unknown"), "assistant", content, provider="cassiopeia", thread_id=thread_id)
         msg: CommAgentMessage = {"task_id": task.get("task_id", str(uuid.uuid4())), "content": content, "requires_user_approval": requires_approval, "agent_name": agent_name}
         source = task.get("source", "slack")
-        await self._cassiopeia.send_message(action="send_message", payload={**msg, "platform": source}, receiver=self._get_comm_receiver(source))
+        await self._cassiopeia.send_message(action="send_message", payload={**msg, "platform": source}, receiver=await self._get_comm_receiver(source))
 
     async def _send_error_to_user(self, task: CassiopeiaTask, error_message: str, agent_name: str = "cassiopeia") -> None:
         await self._send_to_comm_agent(task, f"[{agent_name}] 오류: {error_message}", False, agent_name)
