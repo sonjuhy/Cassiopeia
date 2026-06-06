@@ -133,3 +133,46 @@ class TestCoordinatorPromptIndependence:
         prompt = _COORDINATOR_CAPABILITIES.lower()
         for forbidden in ("archive_agent", "research_agent", "research-agent", "file_agent", "노션"):
             assert forbidden.lower() not in prompt, f"프롬프트에 하드코딩된 토큰: {forbidden}"
+
+
+# ── 내부 툴 판별 중앙화 ───────────────────────────────────────────────────────
+
+def _make_manager(sandbox_tool=None):
+    return CassiopeiaManager(
+        redis_client=AsyncMock(),
+        state_manager=AsyncMock(),
+        health_monitor=AsyncMock(),
+        sandbox_tool=sandbox_tool,
+    )
+
+
+class TestInternalToolRegistry:
+    def test_cassiopeia_agent_is_internal(self):
+        m = _make_manager()
+        assert m._is_internal_tool("cassiopeia_agent") is True
+
+    def test_sandbox_internal_only_when_tool_present(self):
+        assert _make_manager(sandbox_tool=None)._is_internal_tool("sandbox_agent") is False
+        assert _make_manager(sandbox_tool=object())._is_internal_tool("sandbox_agent") is True
+
+    def test_arbitrary_sdk_agent_is_not_internal(self):
+        m = _make_manager(sandbox_tool=object())
+        for name in ("archive_agent", "totally_new_sdk_agent", "communication_agent"):
+            assert m._is_internal_tool(name) is False
+
+    async def test_execute_routes_internal_tool_through_handler(self):
+        """_execute_agent_task 는 등록된 내부 핸들러로 위임하며, 이름 비교를 하지 않는다."""
+        m = _make_manager()
+        sentinel = {"task_id": "t1", "status": "COMPLETED", "agent": "cassiopeia_agent",
+                    "result_data": {}, "error": None}
+        called = {}
+
+        async def fake_handler(task_id, dispatch):
+            called["args"] = (task_id, dispatch)
+            return sentinel
+
+        m._internal_tools["cassiopeia_agent"] = fake_handler
+        dispatch = {"task_id": "t1", "action": "get_agent_list", "params": {}}
+        result = await m._execute_agent_task("cassiopeia_agent", "t1", dispatch, timeout=10)
+        assert result is sentinel
+        assert called["args"][0] == "t1"

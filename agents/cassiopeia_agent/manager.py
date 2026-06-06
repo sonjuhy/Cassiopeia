@@ -234,6 +234,19 @@ class CassiopeiaManager:
         self._cassiopeia = cassiopeia or CassiopeiaClient(agent_id="cassiopeia", redis_url=redis_url)
         self._llm_gateway = None
 
+        # 인프로세스 내부 툴 레지스트리: {에이전트 이름 -> async (task_id, dispatch) -> result}.
+        # 이름 비교를 코드 곳곳에 흩뿌리는 대신 한 곳에 모은다. 외부 SDK 에이전트는
+        # 여기에 등록되지 않으므로 일반 Redis 디스패치 경로를 그대로 탄다.
+        self._internal_tools: dict[str, Any] = {
+            "cassiopeia_agent": lambda task_id, dispatch: self._run_cassiopeia_internal_task(
+                task_id, dispatch["action"], dispatch["params"]
+            ),
+        }
+        if self._sandbox_tool is not None:
+            self._internal_tools["sandbox_agent"] = (
+                lambda task_id, dispatch: self._run_sandbox_task(task_id, dispatch["params"])
+            )
+
         # SDK AgentBrain 초기화
         self.brain = AgentBrain(
             agent_name="cassiopeia_coordinator",
@@ -461,13 +474,13 @@ class CassiopeiaManager:
         return json.loads(res[1]).get("action") == "approve" if res else False
 
     def _is_internal_tool(self, agent_name: str) -> bool:
-        return (agent_name == "sandbox_agent" and self._sandbox_tool is not None) or agent_name == "cassiopeia_agent"
+        """인프로세스 내부 툴 여부를 레지스트리 멤버십으로 판단합니다 (이름 비교 없음)."""
+        return agent_name in self._internal_tools
 
     async def _execute_agent_task(self, agent_name: str, task_id: str, dispatch: DispatchMessage, timeout: int) -> dict[str, Any]:
-        if self._is_internal_tool(agent_name):
-            if agent_name == "cassiopeia_agent":
-                return await self._run_cassiopeia_internal_task(task_id, dispatch["action"], dispatch["params"])
-            return await self._run_sandbox_task(task_id, dispatch["params"])
+        handler = self._internal_tools.get(agent_name)
+        if handler is not None:
+            return await handler(task_id, dispatch)
         dispatch = await self._enrich_dispatch_with_secrets(agent_name, dispatch)
         signed_dispatch = sign_dispatch(dict(dispatch))
         await self._redis.hset(f"agent:{agent_name}:current_task", mapping={"task_id": dispatch["task_id"], "action": dispatch["action"], "started_at": datetime.now(timezone.utc).isoformat()})
