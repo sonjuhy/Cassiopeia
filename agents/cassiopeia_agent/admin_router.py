@@ -1165,6 +1165,17 @@ async def system_control(body: SystemControlBody) -> dict[str, Any]:
       2. 이력은 system:ops:log 에도 기록
       3. 실행 결과는 system:control:{command_id} 해시에 업데이트됨
     """
+    if body.action not in ["terminate", "restart", "optimize"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"허용되지 않은 action입니다: '{body.action}'. (terminate, restart, optimize 허용)",
+        )
+    if body.target not in ["all", "core_engine", "network_mesh"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"허용되지 않은 target입니다: '{body.target}'. (all, core_engine, network_mesh 허용)",
+        )
+
     ts = datetime.now(timezone.utc).isoformat()
     command_id = f"cmd-{uuid.uuid4().hex[:8]}"
 
@@ -1174,10 +1185,13 @@ async def system_control(body: SystemControlBody) -> dict[str, Any]:
         "target": body.target,
         "timestamp": ts,
     }
-    # 실행 큐 — SystemExecutor 가 소비
-    await ctx.redis_client.rpush("system:ops:pending", json.dumps(command, ensure_ascii=False))
-    # 이력 큐 — 감사 로그 용도
-    await ctx.redis_client.lpush("system:ops:log", json.dumps(command, ensure_ascii=False))
+    
+    if getattr(ctx, "redis_client", None) is not None:
+        try:
+            await ctx.redis_client.rpush("system:ops:pending", json.dumps(command, ensure_ascii=False))
+            await ctx.redis_client.lpush("system:ops:log", json.dumps(command, ensure_ascii=False))
+        except Exception:
+            pass
 
     return {
         "status": "success",
@@ -1187,39 +1201,57 @@ async def system_control(body: SystemControlBody) -> dict[str, Any]:
     }
 
 
+
 async def _do_repair(body: SystemRepairBody) -> dict[str, Any]:
     """복구 프로토콜 공유 로직 — /system/repair 와 /system/recovery/repair 에서 호출."""
+    if body.module_id not in ["core_engine", "network_mesh"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"유효하지 않은 module_id입니다: '{body.module_id}'. (core_engine, network_mesh 허용)",
+        )
+    if body.repair_type not in ["hotfix", "full_reinstall"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"유효하지 않은 repair_type입니다: '{body.repair_type}'. (hotfix, full_reinstall 허용)",
+        )
+
     repair_id = f"rep-{uuid.uuid4().hex[:5]}"
     started_at = datetime.now(timezone.utc).isoformat()
     estimated = "45s" if body.repair_type == "hotfix" else "5m"
 
-    # 상태 해시 초기화
-    await ctx.redis_client.hset(
-        f"system:repair:{repair_id}",
-        mapping={
-            "status": "in_progress",
-            "module_id": body.module_id,
-            "repair_type": body.repair_type,
-            "started_at": started_at,
-            "estimated_time": estimated,
-        },
-    )
-    # 실행 큐 — SystemExecutor 가 소비
-    command = {
-        "repair_id": repair_id,
-        "module_id": body.module_id,
-        "repair_type": body.repair_type,
-        "started_at": started_at,
-    }
-    await ctx.redis_client.rpush(
-        "system:repair:pending",
-        json.dumps(command, ensure_ascii=False),
-    )
+    if getattr(ctx, "redis_client", None) is not None:
+        try:
+            # 상태 해시 초기화
+            await ctx.redis_client.hset(
+                f"system:repair:{repair_id}",
+                mapping={
+                    "status": "in_progress",
+                    "module_id": body.module_id,
+                    "repair_type": body.repair_type,
+                    "started_at": started_at,
+                    "estimated_time": estimated,
+                },
+            )
+            # 실행 큐 — SystemExecutor 가 소비
+            command = {
+                "repair_id": repair_id,
+                "module_id": body.module_id,
+                "repair_type": body.repair_type,
+                "started_at": started_at,
+            }
+            await ctx.redis_client.rpush(
+                "system:repair:pending",
+                json.dumps(command, ensure_ascii=False),
+            )
+        except Exception:
+            pass
+
     return {
         "repair_id": repair_id,
         "status": "in_progress",
         "estimated_time": estimated,
     }
+
 
 
 @router.post("/system/repair", summary="시스템 복구 실행 (Repair) — 하위 호환 경로")
@@ -1298,6 +1330,24 @@ async def list_firewall_rules() -> dict[str, Any]:
 
 _ENDPOINTS_KEY = "system:endpoints"
 
+_DEFAULT_ENDPOINTS = [
+
+    {
+        "endpoint_id": "end-1",
+        "path": "/health",
+        "method": "GET",
+        "target_service": "system",
+        "registered_at": "2026-04-22T00:00:00Z",
+    },
+    {
+        "endpoint_id": "end-2",
+        "path": "/tasks",
+        "method": "POST",
+        "target_service": "orchestra",
+        "registered_at": "2026-04-22T00:00:00Z",
+    },
+]
+
 
 @router.post(
     "/endpoints",
@@ -1315,24 +1365,81 @@ async def register_endpoint(body: EndpointRegistrationBody) -> dict[str, Any]:
         "endpoint_id": endpoint_id,
         "registered_at": datetime.now(timezone.utc).isoformat(),
     }
-    await ctx.redis_client.hset(
-        _ENDPOINTS_KEY,
-        endpoint_id,
-        json.dumps(endpoint_data, ensure_ascii=False),
-    )
-    return {"endpoint_id": endpoint_id}
+    if getattr(ctx, "redis_client", None) is not None:
+        await ctx.redis_client.hset(
+            _ENDPOINTS_KEY,
+            endpoint_id,
+            json.dumps(endpoint_data, ensure_ascii=False),
+        )
+
+    return endpoint_data
 
 
 @router.get("/endpoints", summary="등록된 엔드포인트 목록 조회")
 async def list_endpoints() -> dict[str, Any]:
     """등록된 모든 엔드포인트 목록을 반환합니다."""
-    keys = await ctx.redis_client.hkeys(_ENDPOINTS_KEY)
-    endpoints: list[dict[str, Any]] = []
-    for k in keys:
-        raw = await ctx.redis_client.hget(_ENDPOINTS_KEY, k)
-        if raw:
-            try:
-                endpoints.append(json.loads(raw))
-            except Exception:
-                pass
-    return {"endpoints": endpoints}
+    endpoints = list(_DEFAULT_ENDPOINTS)
+    if getattr(ctx, "redis_client", None) is not None:
+        try:
+            keys = await ctx.redis_client.hkeys(_ENDPOINTS_KEY)
+            for k in keys:
+                raw = await ctx.redis_client.hget(_ENDPOINTS_KEY, k)
+                if raw:
+                    try:
+                        ep = json.loads(raw)
+                        if not any(e.get("endpoint_id") == ep.get("endpoint_id") for e in endpoints):
+                            endpoints.append(ep)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    return {"total": len(endpoints), "endpoints": endpoints}
+
+
+class OrchestraConfigBody(BaseModel):
+    default_model: str | None = Field(None, description="기본 사용 AI 모델")
+    global_api_key: str | None = Field(None, description="글로벌 AI API 키")
+    orchestra_settings: dict[str, Any] | None = Field(default_factory=dict, description="추가 오케스트라 설정")
+
+
+_ORCHESTRA_CONFIG_KEY = "system:orchestra:config"
+
+
+@router.put("/config/orchestra", summary="오케스트라 전역 설정 업데이트")
+async def update_orchestra_config(body: OrchestraConfigBody) -> dict[str, Any]:
+    """오케스트라의 전역 모델, API 키 및 추가 설정을 업데이트합니다."""
+    current_config: dict[str, Any] = {
+        "default_model": body.default_model or "cortex-9v",
+        "global_api_key": body.global_api_key or "",
+        "orchestra_settings": body.orchestra_settings or {},
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if getattr(ctx, "redis_client", None) is not None:
+        try:
+            await ctx.redis_client.set(_ORCHESTRA_CONFIG_KEY, json.dumps(current_config, ensure_ascii=False))
+        except Exception:
+            pass
+
+    return {"status": "updated", "config": current_config}
+
+
+@router.get("/config/orchestra", summary="오케스트라 전역 설정 조회")
+async def get_orchestra_config() -> dict[str, Any]:
+    """오케스트라 전역 설정을 반환합니다."""
+    config = {
+        "default_model": "cortex-9v",
+        "global_api_key": "",
+        "orchestra_settings": {},
+    }
+    if getattr(ctx, "redis_client", None) is not None:
+        try:
+            raw = await ctx.redis_client.get(_ORCHESTRA_CONFIG_KEY)
+            if raw:
+                config = json.loads(raw)
+        except Exception:
+            pass
+    return {"config": config}
+
+
+

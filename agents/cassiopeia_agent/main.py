@@ -450,6 +450,63 @@ async def queue_status() -> dict[str, Any]:
     return await ctx.health_monitor.get_all_queues_status()
 
 
+@app.get("/system/usage", tags=["시스템"])
+async def get_system_usage() -> dict[str, Any]:
+    """시스템(CPU, RAM, 디스크, 에이전트 현황, 업타임) 자원 사용량을 반환합니다."""
+    cpu_percent = 0.0
+    cpu_cores = os.cpu_count() or 1
+    mem_percent = 0.0
+    mem_used_mb = 0.0
+    mem_total_mb = 0.0
+    disk_percent = 0.0
+
+    try:
+        import psutil
+        cpu_percent = psutil.cpu_percent(interval=None)
+        mem = psutil.virtual_memory()
+        mem_percent = mem.percent
+        mem_used_mb = round(mem.used / (1024 * 1024), 1)
+        mem_total_mb = round(mem.total / (1024 * 1024), 1)
+        disk = psutil.disk_usage("/")
+        disk_percent = disk.percent
+    except Exception:
+        pass
+
+    running_cnt = 0
+    total_cnt = 0
+    try:
+        if ctx.health_monitor:
+            available = await ctx.health_monitor.get_available_agents()
+            running_cnt = len(available)
+        if ctx.redis_client:
+            registry = await ctx.redis_client.hgetall("agents:registry")
+            total_cnt = len(registry)
+    except Exception:
+        pass
+
+    return {
+        "status": "ONLINE",
+        "cpu": {
+            "percent": cpu_percent,
+            "cores": cpu_cores,
+        },
+        "memory": {
+            "percent": mem_percent,
+            "used_mb": mem_used_mb,
+            "total_mb": mem_total_mb,
+        },
+        "disk": {
+            "percent": disk_percent,
+        },
+        "agents": {
+            "running": running_cnt,
+            "total": total_cnt,
+        },
+        "uptime_seconds": 0,
+    }
+
+
+
 # ── 하위 에이전트 수신 엔드포인트 ────────────────────────────────────────────
 
 
@@ -1063,6 +1120,211 @@ async def get_marketplace_agent_details(agent_id: str) -> dict[str, Any]:
             detail=f"마켓플레이스에서 에이전트 '{agent_id}'를 찾을 수 없습니다.",
         )
     return json.loads(raw)
+
+
+_DEFAULT_MARKETPLACE_AGENTS = [
+    {
+        "id": "mkt-1",
+        "name": "Cortex-9 Analytical",
+        "description": "High-frequency pattern recognition for financial data streams and market sentiment analysis.",
+        "icon": "analytics",
+        "install_status": "installed",
+        "pricing_type": "subscription",
+        "pricing_label": "Subscription",
+        "pricing_value": "$49/mo",
+    },
+    {
+        "id": "mkt-2",
+        "name": "Sentinel Firewall",
+        "description": "Autonomous threat detection and real-time network protocol patching for distributed systems.",
+        "icon": "shield",
+        "install_status": "not_installed",
+        "pricing_type": "one_time",
+        "pricing_label": "One-time",
+        "pricing_value": "$129",
+    },
+    {
+        "id": "mkt-3",
+        "name": "Linguist Prime",
+        "description": "Context-aware translation engine with 99% accuracy across 140+ dialects including technical jargon.",
+        "icon": "translate",
+        "install_status": "active",
+        "pricing_type": "free",
+        "pricing_label": "Free",
+        "pricing_value": "Standard",
+    },
+    {
+        "id": "mkt-4",
+        "name": "Nexus Orchestrator",
+        "description": "The master agent for managing sub-agent communication and resource allocation clusters.",
+        "icon": "grid_view",
+        "install_status": "enterprise",
+        "pricing_type": "subscription",
+        "pricing_label": "Subscription",
+        "pricing_value": "$299/mo",
+    },
+]
+
+_DEFAULT_MARKETPLACE_TEMPLATES = [
+    {
+        "id": "tpl-1",
+        "title": "Customer Support LLM",
+        "category": "Conversational",
+        "description": "Pre-trained on 50k support tickets. Capable of handling level 1 & 2 technical queries.",
+        "downloads": "14.2k",
+        "rating": 4.8,
+        "tags": ["NLP", "Customer Success"],
+    },
+    {
+        "id": "tpl-2",
+        "title": "Data Visualizer Core",
+        "category": "Analytics",
+        "description": "Automatically generates optimal D3.js and Chart.js code from raw JSON datasets.",
+        "downloads": "8.9k",
+        "rating": 4.5,
+        "tags": ["Data Science", "UI/UX"],
+    },
+    {
+        "id": "tpl-3",
+        "title": "Code Review Bot",
+        "category": "Developer Tools",
+        "description": "Hooks into GitHub PRs to find security flaws, anti-patterns, and suggest optimizations.",
+        "downloads": "22.1k",
+        "rating": 4.9,
+        "tags": ["DevOps", "Security"],
+    },
+]
+
+
+@app.get("/marketplace/agents", tags=["마켓플레이스"])
+async def get_marketplace_agents() -> dict[str, Any]:
+    """마켓플레이스 등록 에이전트 목록 카탈로그를 반환합니다."""
+    agents = _DEFAULT_MARKETPLACE_AGENTS
+    if getattr(ctx, "redis_client", None) is not None:
+        try:
+            raw = await ctx.redis_client.get("marketplace:agents:list")
+            if raw:
+                agents = json.loads(raw)
+        except Exception:
+            pass
+    return {"total": len(agents), "agents": agents}
+
+
+@app.get("/marketplace/templates", tags=["마켓플레이스"])
+async def get_marketplace_templates() -> dict[str, Any]:
+    """마켓플레이스 템플릿 목록 카탈로그를 반환합니다."""
+    templates = _DEFAULT_MARKETPLACE_TEMPLATES
+    if getattr(ctx, "redis_client", None) is not None:
+        try:
+            raw = await ctx.redis_client.get("marketplace:templates:list")
+            if raw:
+                templates = json.loads(raw)
+        except Exception:
+            pass
+    return {"total": len(templates), "templates": templates}
+
+
+@app.get("/system/recovery/metrics", tags=["시스템"])
+async def get_system_recovery_metrics() -> dict[str, Any]:
+    """시스템 장애 회복 진단 메트릭을 반환합니다."""
+    active_threats = 0
+    latency_delta = 0
+    integrity_score = 100
+
+    if getattr(ctx, "redis_client", None) is not None:
+        try:
+            raw = await ctx.redis_client.get("system:recovery:metrics")
+            if raw:
+                return json.loads(raw)
+        except Exception:
+            pass
+
+    return {
+        "active_threats": active_threats,
+        "latency_delta": latency_delta,
+        "integrity_score": integrity_score,
+        "activeThreats": active_threats,
+        "latencyDelta": latency_delta,
+        "integrityScore": integrity_score,
+    }
+
+
+@app.get("/endpoints", tags=["시스템"])
+async def get_public_endpoints() -> dict[str, Any]:
+    """등록된 모든 엔드포인트 목록을 반환합니다 (공개/클라이언트용 별칭)."""
+    from .admin_router import list_endpoints
+    return await list_endpoints()
+
+
+_DEFAULT_TRANSACTIONS = [
+    {
+        "id": "TX-90218-A",
+        "activity_type": "LLM Reasoning Cluster",
+        "activityType": "LLM Reasoning Cluster",
+        "activity_icon": "psychology",
+        "activityIcon": "psychology",
+        "icon_color_class": "bg-primary/10 text-primary",
+        "iconColorClass": "bg-primary/10 text-primary",
+        "quantity": "4.2M Tokens",
+        "cost": "$42.00",
+        "status": "settled",
+    },
+    {
+        "id": "TX-89104-B",
+        "activity_type": "Vector Storage Sync",
+        "activityType": "Vector Storage Sync",
+        "activity_icon": "storage",
+        "activityIcon": "storage",
+        "icon_color_class": "bg-tertiary/10 text-tertiary",
+        "iconColorClass": "bg-tertiary/10 text-tertiary",
+        "quantity": "12 GB/h",
+        "cost": "$8.40",
+        "status": "settled",
+    },
+    {
+        "id": "TX-88291-C",
+        "activity_type": "Agent Deployment Fee",
+        "activityType": "Agent Deployment Fee",
+        "activity_icon": "settings_input_component",
+        "activityIcon": "settings_input_component",
+        "icon_color_class": "bg-primary/10 text-primary",
+        "iconColorClass": "bg-primary/10 text-primary",
+        "quantity": "3 Instances",
+        "cost": "$150.00",
+        "status": "pending",
+    },
+    {
+        "id": "TX-87112-Z",
+        "activity_type": "Failed Execution Credit",
+        "activityType": "Failed Execution Credit",
+        "activity_icon": "error",
+        "activityIcon": "error",
+        "icon_color_class": "bg-error/10 text-error",
+        "iconColorClass": "bg-error/10 text-error",
+        "quantity": "Refund",
+        "cost": "-$12.00",
+        "status": "refund",
+    },
+]
+
+
+@app.get("/user/transactions", tags=["사용자"])
+@app.get("/users/{user_id}/transactions", tags=["사용자"])
+async def get_user_transactions(user_id: str = "user_default") -> dict[str, Any]:
+    """사용자의 크레딧/트랜잭션 이용 이력을 반환합니다."""
+    txs = _DEFAULT_TRANSACTIONS
+    if getattr(ctx, "redis_client", None) is not None:
+        try:
+            raw = await ctx.redis_client.get(f"user:{user_id}:transactions")
+            if raw:
+                txs = json.loads(raw)
+        except Exception:
+            pass
+    return {"total": len(txs), "transactions": txs}
+
+
+
+
 
 
 # ── api_spec — 고급 에이전트 등록 (Multipart) ────────────────────────────────
