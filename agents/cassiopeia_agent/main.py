@@ -133,14 +133,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("cassiopeia_agent.main")
 
-_KNOWN_AGENTS = [
-    "archive_agent",
-    "research_agent",
-    "calendar_agent",
-    "file_agent",
-    "communication_agent",
-]
-
 # ── Lifespan ───────────────────────────────────────────────────────────────────
 
 

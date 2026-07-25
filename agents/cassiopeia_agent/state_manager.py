@@ -262,24 +262,6 @@ class StateManager:
     async def get_task_state(self, task_id: str) -> dict[str, Any]:
         return await self._redis.hgetall(f"task:{task_id}:state")
 
-    async def get_session_context_summary(self, session_id: str) -> dict[str, Any]:
-        state = await self._redis.hgetall(f"session:{session_id}:state")
-        user_id = state.get("user_id", "")
-        style = {}
-        if user_id:
-            profile = await self.get_user_profile(user_id)
-            style = profile.get("style_pref", {})
-        
-        async with (await self.ensure_db()).execute("SELECT last_summary FROM sessions WHERE session_id = ?", (session_id,)) as cursor:
-            row = await cursor.fetchone()
-            last_summary = row["last_summary"] if row else ""
-
-        return {"style": style, "last_summary": last_summary}
-
-    async def maybe_summarize(self, session_id: str) -> None:
-        # 요약 로직은 향후 LLM 연동 시 구체화 (현재는 placeholder)
-        pass
-
     # ── Admin API 지원 조회 메서드 ──────────────────────────────────────────────
 
     async def get_agent_logs(

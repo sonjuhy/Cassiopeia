@@ -4,15 +4,12 @@ auth.py 테스트 스위트
 커버리지 목표:
   - verify_admin_key: 유효 / 무효 / None → HTTPException 403
   - verify_client_key: 클라이언트 키 / 관리자 키(동등 허용) / 무효 / None
-  - is_admin: 관리자 키 True / 클라이언트 키 False / None False / 빈 문자열 False
-  - 타이밍 안전 비교 (secrets.compare_digest) 동작 확인
   - 환경변수 미설정 시 RuntimeError 발생
 """
 from __future__ import annotations
 
 import importlib
 import os
-from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
@@ -109,55 +106,6 @@ class TestVerifyClientKey:
         with pytest.raises(HTTPException) as exc_info:
             await auth.verify_client_key(api_key="")
         assert exc_info.value.status_code == 403
-
-
-# ── is_admin ──────────────────────────────────────────────────────────────────
-
-class TestIsAdmin:
-    def test_admin_key_returns_true(self, monkeypatch):
-        import agents.cassiopeia_agent.auth as auth
-        monkeypatch.setattr(auth, "ADMIN_API_KEY", _ADMIN_KEY)
-        assert auth.is_admin(_ADMIN_KEY) is True
-
-    def test_client_key_returns_false(self, monkeypatch):
-        import agents.cassiopeia_agent.auth as auth
-        monkeypatch.setattr(auth, "ADMIN_API_KEY", _ADMIN_KEY)
-        assert auth.is_admin(_CLIENT_KEY) is False
-
-    def test_none_returns_false(self, monkeypatch):
-        import agents.cassiopeia_agent.auth as auth
-        monkeypatch.setattr(auth, "ADMIN_API_KEY", _ADMIN_KEY)
-        assert auth.is_admin(None) is False
-
-    def test_empty_string_returns_false(self, monkeypatch):
-        import agents.cassiopeia_agent.auth as auth
-        monkeypatch.setattr(auth, "ADMIN_API_KEY", _ADMIN_KEY)
-        assert auth.is_admin("") is False
-
-    def test_wrong_key_returns_false(self, monkeypatch):
-        import agents.cassiopeia_agent.auth as auth
-        monkeypatch.setattr(auth, "ADMIN_API_KEY", _ADMIN_KEY)
-        assert auth.is_admin(_BAD_KEY) is False
-
-    def test_is_admin_is_timing_safe(self, monkeypatch):
-        """is_admin 은 secrets.compare_digest 를 사용해야 합니다 (timing-safe)."""
-        import secrets
-        import agents.cassiopeia_agent.auth as auth
-        monkeypatch.setattr(auth, "ADMIN_API_KEY", _ADMIN_KEY)
-
-        call_count = 0
-        original = secrets.compare_digest
-
-        def counting_compare(a, b):
-            nonlocal call_count
-            call_count += 1
-            return original(a, b)
-
-        with patch.object(secrets, "compare_digest", side_effect=counting_compare):
-            # is_admin 내부에서 compare_digest 를 호출해야 함
-            auth.is_admin(_ADMIN_KEY)
-
-        assert call_count >= 1
 
 
 # ── 환경변수 미설정 RuntimeError ──────────────────────────────────────────────

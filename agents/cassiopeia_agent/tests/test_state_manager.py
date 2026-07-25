@@ -280,12 +280,6 @@ class TestSessionManagement:
         assert history[0]["content"] == "first"
         assert history[1]["content"] == "second"
 
-    async def test_get_session_context_summary(self, state_manager):
-        await state_manager.init_session("sess-1", "user-1", "ch-1")
-        summary = await state_manager.get_session_context_summary("sess-1")
-        assert "style" in summary
-        assert "last_summary" in summary
-
 
 # ── 사용자 목록 / scan_task_ids ───────────────────────────────────────────────
 

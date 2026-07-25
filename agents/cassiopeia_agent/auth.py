@@ -50,8 +50,3 @@ async def verify_client_key(api_key: str | None = Security(API_KEY_HEADER)) -> N
             status_code=status.HTTP_403_FORBIDDEN,
             detail="클라이언트 권한 인증에 실패했습니다. (유효하지 않은 X-API-Key)",
         )
-
-
-def is_admin(api_key: str | None) -> bool:
-    """X-API-Key가 관리자 키인지 확인합니다."""
-    return bool(api_key and secrets.compare_digest(api_key, ADMIN_API_KEY))

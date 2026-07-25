@@ -12,7 +12,6 @@ import asyncio
 import json
 import logging
 import os
-import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -23,7 +22,6 @@ logger = logging.getLogger("cassiopeia_agent.health_monitor")
 _CB_THRESHOLD: int = int(os.environ.get("CB_THRESHOLD", "3"))
 _CB_WINDOW_SEC: int = int(os.environ.get("CB_WINDOW_SEC", "300"))
 _HEARTBEAT_VALID_SEC: int = int(os.environ.get("HEARTBEAT_VALID_SEC", "30"))
-_CAPABILITIES_CACHE_TTL: int = int(os.environ.get("CAPABILITIES_CACHE_TTL", "30"))
 
 
 def _is_heartbeat_recent(last_heartbeat: str) -> bool:
@@ -42,8 +40,6 @@ class HealthMonitor:
         else:
             redis_url = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379")
             self._redis = aioredis.from_url(redis_url, decode_responses=True, socket_timeout=5.0)
-        self._capabilities_cache: str = ""
-        self._capabilities_cache_at: float = 0.0
 
     async def is_agent_ready(self, agent_name: str) -> tuple[bool, str]:
         reg_raw = await self._redis.hget("agents:registry", agent_name)
@@ -64,44 +60,6 @@ class HealthMonitor:
         if await self.check_circuit_breaker(agent_name): return False, "CIRCUIT_OPEN"
         
         return True, "OK"
-
-    async def get_nlu_capabilities(self) -> str:
-        """
-        활성화된 모든 에이전트의 NLU 설명을 집계하여 시스템 프롬프트용 문자열로 반환합니다.
-        결과는 30초간 캐싱됩니다.
-
-        각 에이전트는 자신의 Redis health 해시에 'nlu_description' 필드를 작성해야 합니다.
-        (ephemeral 에이전트는 agents:registry 의 'nlu_description' 필드를 사용합니다.)
-        """
-        now = time.monotonic()
-        if self._capabilities_cache and (now - self._capabilities_cache_at) < _CAPABILITIES_CACHE_TTL:
-            return self._capabilities_cache
-
-        try:
-            registry = await self._redis.hgetall("agents:registry")
-            lines: list[str] = []
-            for name, data_raw in registry.items():
-                data = json.loads(data_raw)
-                nlu_desc = data.get("nlu_description", "").strip()
-                
-                if data.get("lifecycle_type") == "long_running":
-                    health = await self._redis.hgetall(f"agent:{name}:health")
-                    if not _is_heartbeat_recent(health.get("last_heartbeat", "")):
-                        continue
-
-                if nlu_desc:
-                    lines.append(nlu_desc)
-
-            result = "\n\n".join(lines)
-            if result:
-                self._capabilities_cache = result
-                self._capabilities_cache_at = now
-                return result
-        except Exception as exc:
-            logger.warning("[HealthMonitor] NLU 캐퍼빌리티 로드 실패: %s", exc)
-
-        # Redis 조회 실패 또는 등록된 에이전트 없음 → 캐시 그대로 반환 (빈 문자열 포함)
-        return self._capabilities_cache
 
     async def register_agent(
         self,
