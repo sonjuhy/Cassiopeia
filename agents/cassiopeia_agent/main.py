@@ -579,7 +579,7 @@ async def get_prompt_suggestions() -> dict[str, Any]:
     suggestion_map = {
         "archive_agent": ["최근 회의록 찾아줘", "데이터베이스 목록 보여줘", "새로운 페이지 작성해줘"],
         "research_agent": ["최신 AI 트렌드 요약해줘", "파이썬 비동기 처리 방법 조사해줘"],
-        "calendar_agent": ["내일 오후 3시에 회의 일정 추가해줘", "이번 주 내 일정 알려줘"],
+        "schedule-agent": ["내일 오후 3시에 회의 일정 추가해줘", "이번 주 내 일정 알려줘"],
         "file_agent": ["현재 디렉토리 파일 목록 보여줘", "README.md 파일 읽어줘"],
         "communication_agent": ["슬랙으로 메시지 보내줘", "팀원에게 진행 상황 공유해줘"]
     }

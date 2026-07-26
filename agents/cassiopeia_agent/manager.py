@@ -384,6 +384,13 @@ class CassiopeiaManager:
         await self._redis.rpush(f"{_RESULTS_KEY_PREFIX}{task_id}", json.dumps(result, ensure_ascii=False))
 
     async def _handle_agent_result(self, result: dict[str, Any], task: CassiopeiaTask, requires_approval: bool) -> None:
+        agent_name = result.get("agent")
+        if agent_name and not self._is_internal_tool(agent_name):
+            if result.get("status") == "FAILED":
+                await self._health.record_failure(agent_name)
+            else:
+                await self._health.record_success(agent_name)
+
         if result.get("status") == "FAILED":
             await self._send_error_to_user(task, result.get("error", {}).get("message", "오류"), result.get("agent"))
             return
@@ -412,7 +419,10 @@ class CassiopeiaManager:
         dispatch = await self._enrich_dispatch_with_secrets(agent_name, dispatch)
         await self._redis.hset(f"agent:{agent_name}:current_task", mapping={"task_id": dispatch["task_id"], "action": dispatch["action"], "started_at": datetime.now(timezone.utc).isoformat()})
         await self._cassiopeia.send_message(action=dispatch["action"], payload=dict(dispatch), receiver=agent_name)
-        try: return await self.wait_for_result(task_id, timeout=timeout)
+        try:
+            result = await self.wait_for_result(task_id, timeout=timeout)
+            result.setdefault("agent", agent_name)
+            return result
         finally: await self._redis.delete(f"agent:{agent_name}:current_task")
 
     async def _enrich_dispatch_with_secrets(self, agent_name: str, dispatch: DispatchMessage) -> DispatchMessage:

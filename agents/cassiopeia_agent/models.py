@@ -131,7 +131,7 @@ def _build_timeout_map() -> dict[str, int]:
     base: dict[str, int] = {
         "archive_agent": 300,
         "research_agent": 300,
-        "calendar_agent": 60,
+        "schedule-agent": 60,
         "file_agent": 120,
         "communication_agent": 30,
         "sandbox_agent": 60,
