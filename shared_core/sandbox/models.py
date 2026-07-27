@@ -2,7 +2,7 @@
 Sandbox 공유 모델 (shared_core)
 
 agents/sandbox_agent에 의존하지 않는 독립 스키마.
-SandboxClient, SandboxMixin에서 사용합니다.
+SandboxClient에서 사용합니다.
 """
 
 from __future__ import annotations

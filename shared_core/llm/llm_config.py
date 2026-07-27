@@ -3,7 +3,6 @@
 
 - LLMConfig: 불변 LLM 설정 값 객체
 - load_llm_config_for_agent: 에이전트 이름 기반 환경변수 우선순위 해석
-- llm_config_from_dispatch: dispatch 메시지에서 per-call 설정 추출
 """
 from __future__ import annotations
 
@@ -54,46 +53,3 @@ def load_llm_config_for_agent(agent_name: str) -> LLMConfig:
         api_key = api_key.strip("\"'")
 
     return LLMConfig(backend=backend, model=model, api_key=api_key)
-
-
-def llm_config_from_dispatch(dispatch_msg: dict) -> LLMConfig | None:
-    """
-    dispatch 메시지의 llm_config 필드에서 per-call LLMConfig를 추출합니다.
-
-    llm_config 필드가 없거나, backend가 명시되지 않은 경우 None을 반환합니다.
-
-    dispatch 메시지 형식:
-        {
-            "task_id": "...",
-            "llm_config": {
-                "backend": "claude",          # 필수
-                "model": "claude-haiku-...",  # 선택
-                "api_key": "sk-..."           # 선택
-            }
-        }
-
-    Returns:
-        LLMConfig 인스턴스 또는 None.
-    """
-    raw = dispatch_msg.get("llm_config")
-    if not raw or not isinstance(raw, dict):
-        return None
-
-    backend = raw.get("backend")
-    if not backend:
-        return None
-
-    backend = str(backend).strip("\"'").lower()
-    model = raw.get("model")
-    if model:
-        model = str(model).strip("\"'")
-        
-    api_key = raw.get("api_key")
-    if api_key:
-        api_key = str(api_key).strip("\"'")
-
-    return LLMConfig(
-        backend=backend,
-        model=model or None,
-        api_key=api_key or None,
-    )

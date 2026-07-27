@@ -1,8 +1,7 @@
-from .schema import AgentMessage, AgentName, ActionName, MessageBrokerProtocol
+from .schema import AgentMessage, AgentName, ActionName
 
 __all__ = [
     "AgentMessage",
     "AgentName",
     "ActionName",
-    "MessageBrokerProtocol",
 ]

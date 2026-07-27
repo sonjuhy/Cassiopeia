@@ -1,3 +1,3 @@
-from .messaging import AgentMessage, AgentName, MessageBrokerProtocol
+from .messaging import AgentMessage, AgentName
 
-__all__ = ["AgentMessage", "AgentName", "MessageBrokerProtocol"]
+__all__ = ["AgentMessage", "AgentName"]

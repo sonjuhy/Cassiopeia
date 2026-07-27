@@ -72,13 +72,3 @@ class LLMProviderProtocol(Protocol):
             연결 성공 시 True, 실패 시 False.
         """
         ...
-
-
-class LLMLoggerProtocol(Protocol):
-    """
-    LLM 로그를 기록하고 관리하는 인터페이스입니다.
-    """
-
-    async def log(self, entry: LLMLogEntry) -> None:
-        """로그를 저장소에 기록합니다."""
-        ...

@@ -1,6 +1,5 @@
-from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any
 from pydantic import BaseModel, Field, ConfigDict
 
 # AgentName 은 열거 타입이 아닌 str 별칭입니다.
@@ -40,30 +39,3 @@ class AgentMessage(BaseModel):
     def from_json(cls, json_str: str) -> "AgentMessage":
         """JSON 문자열로부터 AgentMessage 인스턴스를 생성합니다."""
         return cls.model_validate_json(json_str)
-
-
-class MessageBrokerProtocol(Protocol):
-    """cassiopeia-sdk 기반 에이전트 메시지 브로커 인터페이스.
-
-    모든 에이전트 메시지 브로커 구현체는 이 Protocol을 따릅니다.
-    채널 이름 규칙: ``agent:{agent_name}``
-    """
-
-    async def publish(self, message: AgentMessage) -> bool:
-        """메시지를 수신 에이전트의 채널에 발행합니다.
-
-        Args:
-            message: 발행할 AgentMessage 객체. ``message.receiver`` 채널로 전송됩니다.
-
-        Returns:
-            발행 성공 시 ``True``, 실패 시 ``False``.
-        """
-        ...
-
-    def subscribe(self) -> AsyncIterator[AgentMessage]:
-        """이 브로커의 agent_id를 대상으로 하는 메시지를 비동기로 수신 대기합니다.
-
-        Returns:
-            수신된 AgentMessage를 순차적으로 yield 하는 AsyncIterator.
-        """
-        ...

@@ -1,5 +1,5 @@
 """
-CalendarProviderProtocol 구체 구현체
+캘린더 공급자 구체 구현체
 
 - GoogleCalendarProvider: Google Calendar API v3 (서비스 계정 인증)
 """
@@ -38,7 +38,7 @@ class GoogleCalendarProvider:
         self._service = None  # 지연 초기화
 
     # ------------------------------------------------------------------ #
-    # CalendarProviderProtocol 구현                                        #
+    # 캘린더 CRUD 구현                                                     #
     # ------------------------------------------------------------------ #
 
     async def get_events(

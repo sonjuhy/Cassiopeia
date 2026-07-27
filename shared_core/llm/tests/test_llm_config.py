@@ -6,7 +6,6 @@ LLMConfig 및 load_llm_config_for_agent 테스트
 - 전역 LLM_BACKEND 폴백
 - 최종 기본값 "gemini"
 - 모델/API키 환경변수 해석
-- dispatch 메시지에서 per-call 설정 추출
 """
 from __future__ import annotations
 
@@ -15,7 +14,6 @@ import pytest
 from shared_core.llm.llm_config import (
     LLMConfig,
     load_llm_config_for_agent,
-    llm_config_from_dispatch,
 )
 
 
@@ -120,51 +118,3 @@ class TestLoadLLMConfigForAgent:
         monkeypatch.setenv("ARCHIVE_AGENT_LLM_BACKEND", "CLAUDE")
         cfg = load_llm_config_for_agent("archive_agent")
         assert cfg.backend == "claude"
-
-
-# ── llm_config_from_dispatch ──────────────────────────────────────────────────
-
-class TestLLMConfigFromDispatch:
-    def test_returns_none_when_no_llm_config_field(self):
-        dispatch = {"task_id": "t1", "action": "search", "params": {}}
-        assert llm_config_from_dispatch(dispatch) is None
-
-    def test_returns_config_from_dispatch_message(self):
-        dispatch = {
-            "task_id": "t1",
-            "action": "search",
-            "llm_config": {"backend": "claude"},
-        }
-        cfg = llm_config_from_dispatch(dispatch)
-        assert cfg is not None
-        assert cfg.backend == "claude"
-
-    def test_dispatch_config_with_model(self):
-        dispatch = {
-            "llm_config": {"backend": "gemini", "model": "gemini-2.5-flash"},
-        }
-        cfg = llm_config_from_dispatch(dispatch)
-        assert cfg is not None
-        assert cfg.model == "gemini-2.5-flash"
-
-    def test_dispatch_config_with_api_key(self):
-        dispatch = {
-            "llm_config": {"backend": "claude", "api_key": "per-call-key"},
-        }
-        cfg = llm_config_from_dispatch(dispatch)
-        assert cfg is not None
-        assert cfg.api_key == "per-call-key"
-
-    def test_dispatch_config_backend_lowercased(self):
-        dispatch = {"llm_config": {"backend": "Claude"}}
-        cfg = llm_config_from_dispatch(dispatch)
-        assert cfg is not None
-        assert cfg.backend == "claude"
-
-    def test_returns_none_when_llm_config_is_none(self):
-        dispatch = {"llm_config": None}
-        assert llm_config_from_dispatch(dispatch) is None
-
-    def test_returns_none_when_llm_config_missing_backend(self):
-        dispatch = {"llm_config": {"model": "gemini-2.5-flash"}}
-        assert llm_config_from_dispatch(dispatch) is None
