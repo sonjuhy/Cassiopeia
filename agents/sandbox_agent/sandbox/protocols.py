@@ -1,12 +1,12 @@
 """
 Sandbox 프로토콜 인터페이스 (Python 3.12+)
 - 모든 인터페이스는 typing.Protocol로 정의 (ABC 미사용)
-- 구현체: FirecrackerSandbox, DockerSandbox, VMPool
+- 구현체: FirecrackerSandbox, DockerSandbox
 """
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Protocol
 
 from .models import ExecuteRequest, SandboxTaskResult
 
@@ -22,28 +22,4 @@ class SandboxProtocol(Protocol):
 
     async def close(self) -> None:
         """샌드박스 자원(프로세스, 소켓, 네트워크)을 정리합니다."""
-        ...
-
-
-class VMPoolProtocol(Protocol):
-    """VM 사전 워밍 풀 인터페이스."""
-
-    async def start(self) -> None:
-        """풀 초기화 및 min_ready개 VM 사전 부팅."""
-        ...
-
-    async def acquire(self) -> SandboxProtocol:
-        """풀에서 준비된 VM을 대여합니다."""
-        ...
-
-    async def release(self, vm: SandboxProtocol) -> None:
-        """사용 완료된 VM을 폐기하고 새 VM으로 보충합니다."""
-        ...
-
-    async def shutdown(self) -> None:
-        """대기 중인 모든 VM을 정리하고 풀을 종료합니다."""
-        ...
-
-    def stats(self) -> dict[str, Any]:
-        """ready_count, active_count, max_size, runtime 등 현재 상태를 반환합니다."""
         ...

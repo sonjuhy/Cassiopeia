@@ -1,6 +1,6 @@
 """
 File Agent 구체 구현체
-- FileAgentProtocol 구현: read / write / update / delete
+- read / write / update / delete 파일 CRUD 작업 수행
 - cassiopeia-sdk CassiopeiaClient.listen()으로 카시오페아 디스패치 수신
 - 처리 결과를 HTTP POST /results 로 카시오페아에 전송
 """
@@ -33,7 +33,7 @@ _DLQ_KEY = "cassiopeia:dlq"
 
 class FileAgent:
     """
-    FileAgentProtocol의 구체 구현체.
+    파일 CRUD 작업을 수행하는 에이전트.
     cassiopeia-sdk를 사용해 카시오페아로부터 태스크 메시지를 수신합니다.
     """
 
