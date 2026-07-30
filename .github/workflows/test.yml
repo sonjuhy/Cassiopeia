@@ -35,10 +35,10 @@ jobs:
           cache: pip
 
       # ── 공통 의존성 ──────────────────────────────────────────────────────────
-      - name: Install shared_core dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r shared_core/requirements.txt
+      # shared_core는 자체 requirements.txt가 없음 — pydantic/httpx/google-genai/
+      # anthropic 등 실제 필요한 패키지는 아래 에이전트별 requirements.txt에 이미 포함되어 있음.
+      - name: Upgrade pip
+        run: pip install --upgrade pip
 
       # ── 에이전트별 의존성 ────────────────────────────────────────────────────
       - name: Install cassiopeia_agent dependencies
@@ -60,6 +60,7 @@ jobs:
             pytest \
             pytest-asyncio \
             pytest-env \
+            pytest-httpx \
             fakeredis \
             httpx \
             python-multipart
