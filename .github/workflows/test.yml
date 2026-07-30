@@ -14,6 +14,7 @@ on:
     paths:
       - 'agents/**'
       - 'shared_core/**'
+  workflow_call: {}
 
 jobs:
   test:
