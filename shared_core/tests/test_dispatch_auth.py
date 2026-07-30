@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from shared_core.dispatch_auth import DispatchAuthError, sign_task, verify_task
+from shared_core.dispatch_auth import DispatchAuthError, sign_task, verify_task, sign_dispatch
 
 _SECRET = "test-hmac-secret-32bytes-padding!!"
 
@@ -135,3 +135,34 @@ class TestCanonical:
         }
         signed = sign_task(api_task)
         verify_task(signed)
+
+
+class TestSignDispatch:
+    def test_sign_dispatch_covers_all_fields(self, with_secret):
+        dispatch = {
+            "task_id": "dispatch-001",
+            "version": "1.1",
+            "params": {"code": "print(1)"},
+            "metadata": {"requires_user_approval": False}
+        }
+        signed = sign_dispatch(dispatch)
+        assert "_hmac" in signed
+        assert signed["_hmac"] is not None
+
+        # Verify using raw verification logic matching SDK
+        body = {k: v for k, v in signed.items() if k != "_hmac"}
+        import hmac
+        import hashlib
+        expected = hmac.new(
+            _SECRET.encode(),
+            json.dumps(body, sort_keys=True, ensure_ascii=False).encode(),
+            hashlib.sha256
+        ).hexdigest()
+        assert signed["_hmac"] == expected
+
+    def test_sign_dispatch_without_secret_returns_unchanged(self, without_secret):
+        dispatch = {"task_id": "dispatch-002", "version": "1.1"}
+        signed = sign_dispatch(dispatch)
+        assert "_hmac" not in signed
+        assert signed == dispatch
+

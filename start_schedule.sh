@@ -12,9 +12,16 @@ docker rm -f schedule_agent 2>/dev/null || true
 echo "[3/3] 일정 에이전트 실행 중..."
 # REDIS_URL과 CASSIOPEIA_URL을 도커 네트워크 내부 주소로 덮어씁니다.
 # .env의 CLIENT_API_KEY를 CASSIOPEIA_API_KEY로 전달합니다.
+# google-credentials.json 파일이 있으면 볼륨 마운트 추가
+VOLUMES=""
+if [ -f google-credentials.json ]; then
+  VOLUMES="-v $(pwd)/google-credentials.json:/app/google-credentials.json:ro"
+fi
+
 docker run -d \
   --name schedule_agent \
   --network cassiopeia_default \
+  $VOLUMES \
   --env-file .env \
   -e REDIS_URL=redis://cassiopeia:fc1e856eb57e6a6f4ff28b78dd185db1@redis:6379 \
   -e CASSIOPEIA_URL=http://cassiopeia-cassiopeia_agent-1:49152 \

@@ -101,7 +101,7 @@ def _validate_callback_url(url: str) -> None:
 
 from shared_core.llm import OllamaManager
 from shared_core.agent_logger import setup_logging
-from shared_core.dispatch_auth import sign_task, verify_task, DispatchAuthError
+from shared_core.dispatch_auth import sign_task, verify_task, DispatchAuthError, sign_dispatch
 
 from .app_context import ctx
 from .auth import CLIENT_API_KEY, verify_admin_key, verify_client_key
@@ -215,11 +215,16 @@ async def _startup(app: FastAPI):  # noqa: C901
 
     # 기본 시스템 에이전트만 최소한으로 등록 (나머지는 하위 에이전트가 기동 시 자동 등록)
     await ctx.health_monitor.register_agent(
-        "cassiopeia_agent", 
+        "cassiopeia_agent",
         ["get_agent_list", "get_system_status", "get_queue_status"],
         lifecycle_type="internal",
         nlu_description="- cassiopeia_agent: 시스템 상태 조회 및 관리 전용.",
-        permission_preset="standard"
+        permission_preset="standard",
+        # 내장 에이전트도 라우팅 힌트를 코드 분기가 아닌 선언으로 제공한다.
+        params_schema={
+            "action": "get_agent_list, get_system_status, get_queue_status 등",
+            "params": {},
+        },
     )
 
     ctx.cassiopeia_client = CassiopeiaClient(agent_id="cassiopeia-api", redis_url=redis_url)
@@ -372,6 +377,12 @@ class RegisterAgentBody(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
     lifecycle_type: str = Field(default="long_running", max_length=50)
     nlu_description: str = Field(default="", max_length=2000)
+    permission_preset: str = Field(default="standard", max_length=50)
+    allow_llm_access: bool | None = Field(default=None)
+    # 자기 기술(self-describing) 라우팅 메타데이터 — 지휘자의 에이전트별 하드코딩 제거 기반.
+    params_schema: dict[str, Any] | None = Field(default=None)
+    default_timeout: int | None = Field(default=None, ge=1, le=86400)
+    routing: dict[str, Any] | None = Field(default=None)
 
 
 class HeartbeatBody(BaseModel):
@@ -793,7 +804,7 @@ async def direct_dispatch(body: DirectDispatchBody) -> dict[str, Any]:
     }
     await ctx.cassiopeia_client.send_message(
         action=body.action,
-        payload=dispatch_msg,
+        payload=sign_dispatch(dispatch_msg),
         receiver=body.agent_name,
     )
 
@@ -822,6 +833,11 @@ async def register_agent(body: RegisterAgentBody) -> dict[str, Any]:
         body.capabilities,
         lifecycle_type=body.lifecycle_type,
         nlu_description=body.nlu_description,
+        permission_preset=body.permission_preset,
+        allow_llm_access=body.allow_llm_access,
+        params_schema=body.params_schema,
+        default_timeout=body.default_timeout,
+        routing=body.routing,
     )
     return {"status": "registered", "agent_name": body.agent_name}
 

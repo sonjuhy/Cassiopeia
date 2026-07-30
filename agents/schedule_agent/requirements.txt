@@ -18,6 +18,9 @@ google-api-python-client>=2.125.0
 google-auth-httplib2>=0.2.0
 google-auth-oauthlib>=1.2.0
 
+# Google GenAI SDK (Required by shared_core.llm)
+google-genai>=1.0.0
+
 # HTTP client
 httpx>=0.27.0
 

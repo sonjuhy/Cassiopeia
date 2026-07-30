@@ -1,0 +1,178 @@
+"""
+지휘자(CassiopeiaManager)의 '완전 독립' 보장 테스트.
+
+지휘자는 에이전트 이름을 코드에서 특별 취급하지 않는다. 라우팅 파라미터 가이드,
+작업 타임아웃, 커뮤니케이션 수신자는 모두 레지스트리에 저장된 self-describing
+메타데이터(params_schema / default_timeout / routing)에서만 결정되어야 한다.
+"""
+from __future__ import annotations
+
+import json
+
+import pytest
+from unittest.mock import AsyncMock
+
+from agents.cassiopeia_agent.manager import (
+    CassiopeiaManager,
+    _GENERIC_PARAMS_GUIDE,
+    _resolve_comm_receiver,
+    _resolve_timeout,
+    _tool_parameters_for,
+)
+from agents.cassiopeia_agent.models import DEFAULT_AGENT_TIMEOUT
+
+
+def _comm(name, platforms):
+    return {name: {"name": name, "routing": {"role": "communication", "platforms": platforms}}}
+
+
+# ── _tool_parameters_for: params_schema 레지스트리 기반화 ──────────────────────
+
+class TestToolParametersFor:
+    def test_uses_declared_params_schema(self):
+        reg = {"params_schema": {"action": "search", "params": {"query": "검색어"}}}
+        assert _tool_parameters_for(reg) == {"action": "search", "params": {"query": "검색어"}}
+
+    def test_generic_fallback_when_missing(self):
+        assert _tool_parameters_for({}) == _GENERIC_PARAMS_GUIDE
+
+    def test_generic_fallback_when_none(self):
+        assert _tool_parameters_for({"params_schema": None}) == _GENERIC_PARAMS_GUIDE
+
+    def test_generic_fallback_when_empty_dict(self):
+        assert _tool_parameters_for({"params_schema": {}}) == _GENERIC_PARAMS_GUIDE
+
+    def test_returns_copy_not_shared_generic(self):
+        """generic 가이드를 반환할 때 모듈 상수를 그대로 노출해 변형 위험을 만들지 않는다."""
+        out = _tool_parameters_for({})
+        out["action"] = "mutated"
+        assert _GENERIC_PARAMS_GUIDE["action"] != "mutated"
+
+    def test_no_agent_name_branching(self):
+        """에이전트 이름과 무관하게 동일 규칙이 적용된다 (이름 하드코딩 부재)."""
+        schema = {"action": "x", "params": {}}
+        for name in ("sandbox_agent", "cassiopeia_agent", "totally_new_sdk_agent"):
+            reg = {"name": name, "params_schema": schema}
+            assert _tool_parameters_for(reg) == schema
+
+
+# ── _resolve_timeout: default_timeout 레지스트리 기반화 ────────────────────────
+
+class TestResolveTimeout:
+    def test_uses_agent_declared_timeout(self):
+        reg = {"default_timeout": 90}
+        assert _resolve_timeout("any_agent", reg, overrides={}) == 90
+
+    def test_global_default_when_not_declared(self):
+        assert _resolve_timeout("any_agent", {}, overrides={}) == DEFAULT_AGENT_TIMEOUT
+
+    def test_global_default_when_declared_none(self):
+        assert _resolve_timeout("any_agent", {"default_timeout": None}, overrides={}) == DEFAULT_AGENT_TIMEOUT
+
+    def test_global_default_when_declared_non_positive(self):
+        assert _resolve_timeout("a", {"default_timeout": 0}, overrides={}) == DEFAULT_AGENT_TIMEOUT
+        assert _resolve_timeout("a", {"default_timeout": -5}, overrides={}) == DEFAULT_AGENT_TIMEOUT
+
+    def test_operator_override_wins_over_declaration(self):
+        """운영자가 env로 지정한 오버라이드가 에이전트 선언보다 우선한다."""
+        reg = {"default_timeout": 90}
+        assert _resolve_timeout("archive_agent", reg, overrides={"archive_agent": 900}) == 900
+
+    def test_no_hardcoded_agent_names(self):
+        """이전에 하드코딩되던 이름(communication_agent 등)도 특별 취급 없이 전역 기본값."""
+        assert _resolve_timeout("communication_agent", {}, overrides={}) == DEFAULT_AGENT_TIMEOUT
+        assert _resolve_timeout("sandbox_agent", {}, overrides={}) == DEFAULT_AGENT_TIMEOUT
+
+
+# ── _resolve_comm_receiver: routing 기반 커뮤니케이션 수신자 ───────────────────
+
+class TestResolveCommReceiver:
+    def test_matches_declared_platform(self):
+        registry = _comm("discord_bridge", ["discord"])
+        assert _resolve_comm_receiver("discord", registry, default="fallback") == "discord_bridge"
+
+    def test_picks_right_agent_among_many(self):
+        registry = {}
+        registry.update(_comm("slack_bot", ["slack"]))
+        registry.update(_comm("tg_bot", ["telegram"]))
+        assert _resolve_comm_receiver("telegram", registry, default="fallback") == "tg_bot"
+
+    def test_wildcard_platform_acts_as_catch_all(self):
+        registry = _comm("omni_comm", ["*"])
+        assert _resolve_comm_receiver("whatsapp", registry, default="fallback") == "omni_comm"
+
+    def test_explicit_platform_beats_wildcard(self):
+        registry = {}
+        registry.update(_comm("omni_comm", ["*"]))
+        registry.update(_comm("slack_bot", ["slack"]))
+        assert _resolve_comm_receiver("slack", registry, default="fallback") == "slack_bot"
+
+    def test_falls_back_to_default_when_no_comm_agent(self):
+        registry = {"file_agent": {"name": "file_agent", "routing": {"role": "worker"}}}
+        assert _resolve_comm_receiver("slack", registry, default="communication_agent") == "communication_agent"
+
+    def test_ignores_non_communication_role(self):
+        registry = {"x": {"routing": {"role": "worker", "platforms": ["slack"]}}}
+        assert _resolve_comm_receiver("slack", registry, default="dflt") == "dflt"
+
+    def test_handles_missing_routing_gracefully(self):
+        registry = {"legacy": {"name": "legacy"}}  # routing 키 없음
+        assert _resolve_comm_receiver("slack", registry, default="dflt") == "dflt"
+
+
+# ── NLU 코디네이터 프롬프트 비종속성 ──────────────────────────────────────────
+
+class TestCoordinatorPromptIndependence:
+    def test_prompt_has_no_hardcoded_builtin_agent_names(self):
+        """지휘자 시스템 프롬프트는 특정 내장 에이전트 이름을 박아두지 않아야 한다.
+
+        라우팅 후보는 런타임에 레지스트리에서 동적으로 주입되는 도구 목록에서만 와야 한다.
+        """
+        from agents.cassiopeia_agent.manager import _COORDINATOR_CAPABILITIES
+
+        prompt = _COORDINATOR_CAPABILITIES.lower()
+        for forbidden in ("archive_agent", "research_agent", "research-agent", "file_agent", "노션"):
+            assert forbidden.lower() not in prompt, f"프롬프트에 하드코딩된 토큰: {forbidden}"
+
+
+# ── 내부 툴 판별 중앙화 ───────────────────────────────────────────────────────
+
+def _make_manager(sandbox_tool=None):
+    return CassiopeiaManager(
+        redis_client=AsyncMock(),
+        state_manager=AsyncMock(),
+        health_monitor=AsyncMock(),
+        sandbox_tool=sandbox_tool,
+    )
+
+
+class TestInternalToolRegistry:
+    def test_cassiopeia_agent_is_internal(self):
+        m = _make_manager()
+        assert m._is_internal_tool("cassiopeia_agent") is True
+
+    def test_sandbox_internal_only_when_tool_present(self):
+        assert _make_manager(sandbox_tool=None)._is_internal_tool("sandbox_agent") is False
+        assert _make_manager(sandbox_tool=object())._is_internal_tool("sandbox_agent") is True
+
+    def test_arbitrary_sdk_agent_is_not_internal(self):
+        m = _make_manager(sandbox_tool=object())
+        for name in ("archive_agent", "totally_new_sdk_agent", "communication_agent"):
+            assert m._is_internal_tool(name) is False
+
+    async def test_execute_routes_internal_tool_through_handler(self):
+        """_execute_agent_task 는 등록된 내부 핸들러로 위임하며, 이름 비교를 하지 않는다."""
+        m = _make_manager()
+        sentinel = {"task_id": "t1", "status": "COMPLETED", "agent": "cassiopeia_agent",
+                    "result_data": {}, "error": None}
+        called = {}
+
+        async def fake_handler(task_id, dispatch):
+            called["args"] = (task_id, dispatch)
+            return sentinel
+
+        m._internal_tools["cassiopeia_agent"] = fake_handler
+        dispatch = {"task_id": "t1", "action": "get_agent_list", "params": {}}
+        result = await m._execute_agent_task("cassiopeia_agent", "t1", dispatch, timeout=10)
+        assert result is sentinel
+        assert called["args"][0] == "t1"

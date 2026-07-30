@@ -52,15 +52,15 @@ class ScheduleAgent:
             scopes=self._config.scopes,
         )
         
-        # SDK AgentBrain 초기화
         self.brain = AgentBrain(
             agent_name=self.agent_name,
             capabilities="""당신은 개인 비서 및 일정 관리 전문가입니다. 
 구글 캘린더를 사용하여 일정을 조회, 추가, 수정, 삭제합니다. 
-사용자의 자연어 요청에서 정확한 시간(ISO 포맷)과 이벤트 내용을 추출합니다.""",
+사용자의 자연어 요청에서 정확한 시간(ISO 포맷)과 이벤트 내용을 추출합니다.
+특히 '가장 가까운 일정', '다가오는 일정', '무슨 일정이 있니' 등 특정 날짜가 주어지지 않은 일반적인 조회 요청의 경우, 현재부터 향후 30일 간을 검색 기간(start_time, end_time)으로 자동 설정하세요.""",
             backend="gateway",
             llm_caller=self._direct_llm_caller,
-            config=AgentBrainConfig(max_retries=2)
+            config=AgentBrainConfig(max_retries=2, enable_direct_response=True)
         )
 
     async def _direct_llm_caller(self, messages: list[dict], max_tokens: int = 500, temperature: float = 0.7, model: str | None = None, **kwargs) -> Any:
@@ -102,8 +102,9 @@ class ScheduleAgent:
                 history=history or []
             )
 
-            if decision.action == "ask_clarification":
-                return {"status": "error", "message": decision.suggested_reply or "추가 정보가 필요합니다."}
+            if decision.action in ("ask_clarification", "direct_response"):
+                # SDK 기본 내장 action 처리
+                return {"status": "success", "action": decision.action, "message": decision.suggested_reply or "추가 정보가 필요합니다."}
 
             final_action = decision.action
             final_params = decision.params
@@ -126,17 +127,30 @@ class ScheduleAgent:
 
     async def _handle_list(self, payload: dict) -> dict:
         try:
-            # NLU가 시간을 파싱하지 못했을 경우 오늘을 기본값으로 사용
+            # NLU가 시간을 파싱하지 못했을 경우 오늘부터 30일 후를 기본값으로 사용
             if "start_time" not in payload or "end_time" not in payload:
                 now = datetime.now(timezone.utc)
                 start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                end_time = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+                from datetime import timedelta
+                end_time = (start_time + timedelta(days=30)).replace(hour=23, minute=59, second=59, microsecond=999999)
             else:
                 start_time = datetime.fromisoformat(payload["start_time"])
                 end_time = datetime.fromisoformat(payload["end_time"])
                 
             events = await self._provider.get_events(start_time, end_time)
-            return {"status": "success", "events": [e.__dict__ for e in events]}
+            serializable_events = []
+            for e in events:
+                serializable_events.append({
+                    "event_id": e.event_id,
+                    "title": e.title,
+                    "start_time": e.start_time.isoformat() if isinstance(e.start_time, datetime) else str(e.start_time),
+                    "end_time": e.end_time.isoformat() if isinstance(e.end_time, datetime) else str(e.end_time),
+                    "description": e.description,
+                    "location": e.location,
+                    "attendees": e.attendees,
+                    "status": e.status,
+                })
+            return {"status": "success", "events": serializable_events}
         except Exception as e: return {"status": "error", "message": str(e)}
 
     async def _handle_add(self, payload: dict) -> dict:
@@ -158,6 +172,78 @@ class ScheduleAgent:
             success = await self._provider.delete_event(payload["event_id"])
             return {"status": "success" if success else "error"}
         except Exception as e: return {"status": "error", "message": str(e)}
+
+    def _format_agent_result(self, action: str, result: dict) -> tuple[str, str]:
+        """결과 데이터를 사용자가 보기 편한 한국어 메시지로 변환합니다."""
+        if result.get("status") == "error":
+            summary = "❌ 작업 실패"
+            content = f"오류가 발생했습니다: {result.get('message')}"
+            return summary, content
+
+        # 내부 AgentBrain이 결정한 action이 있으면 우선시 (대화 응답용)
+        actual_action = result.get("action", action)
+        if actual_action in ("ask_clarification", "direct_response"):
+            summary = "💬 답변"
+            content = result.get("message", "알겠습니다.")
+            return summary, content
+
+        if actual_action == "list_schedules":
+            summary = "📅 일정 조회 결과"
+            events = result.get("events", [])
+            if not events:
+                content = "조회된 일정이 없습니다."
+            else:
+                lines = [f"총 {len(events)}개의 일정이 있습니다."]
+                for idx, event in enumerate(events, 1):
+                    title = event.get("title", "(제목 없음)")
+                    start_str = event.get("start_time", "")
+                    end_str = event.get("end_time", "")
+                    location = event.get("location")
+                    description = event.get("description")
+                    
+                    try:
+                        # ISO 포맷 파싱
+                        start_dt = datetime.fromisoformat(start_str)
+                        end_dt = datetime.fromisoformat(end_str)
+                        
+                        # 같은 날이면 날짜는 한 번만 표시하고 시간 위주로
+                        if start_dt.date() == end_dt.date():
+                            time_range = f"{start_dt.strftime('%m/%d %H:%M')} ~ {end_dt.strftime('%H:%M')}"
+                        else:
+                            time_range = f"{start_dt.strftime('%m/%d %H:%M')} ~ {end_dt.strftime('%m/%d %H:%M')}"
+                    except Exception:
+                        time_range = f"{start_str} ~ {end_str}"
+                    
+                    details = []
+                    if location:
+                        details.append(f"장소: {location}")
+                    if description:
+                        details.append(f"설명: {description}")
+                    
+                    details_str = f" [{', '.join(details)}]" if details else ""
+                    lines.append(f"{idx}. *{title}* ({time_range}){details_str}")
+                content = "\n".join(lines)
+                
+        elif action == "add_schedule":
+            summary = "✅ 일정 추가 완료"
+            content = "새로운 일정이 캘린더에 정상적으로 등록되었습니다."
+            event_id = result.get("event_id")
+            if event_id:
+                content += f"\n(일정 ID: {event_id})"
+                
+        elif action == "modify_schedule":
+            summary = "✏️ 일정 수정 완료"
+            content = "일정이 정상적으로 수정되었습니다."
+            
+        elif action == "remove_schedule":
+            summary = "🗑️ 일정 삭제 완료"
+            content = "일정이 정상적으로 삭제되었습니다."
+            
+        else:
+            summary = f"{action} 완료"
+            content = json.dumps(result, ensure_ascii=False, indent=2)
+            
+        return summary, content
 
     async def _report_result(
         self,
@@ -273,11 +359,12 @@ class ScheduleAgent:
                     "error": {"code": "EXECUTION_ERROR", "message": msg_text, "traceback": None},
                 }
             else:
+                summary, content = self._format_agent_result(action, result)
                 agent_result = {
                     "status": "COMPLETED",
                     "result_data": {
-                        "summary": f"{action} 완료",
-                        "content": json.dumps(result, ensure_ascii=False, indent=2),
+                        "summary": summary,
+                        "content": content,
                         "data": result,
                     },
                     "error": None,

@@ -69,7 +69,22 @@ class HealthMonitor:
         nlu_description: str = "",
         permission_preset: str = "standard",
         allow_llm_access: bool | None = None,
+        params_schema: dict | None = None,
+        default_timeout: int | None = None,
+        routing: dict | None = None,
     ) -> None:
+        """에이전트를 레지스트리에 등록합니다.
+
+        지휘자가 에이전트 이름을 코드에서 특별 취급하지 않도록, 라우팅에 필요한
+        모든 메타데이터를 에이전트가 직접 선언해 여기에 영속화합니다.
+
+            params_schema:   지휘자가 LLM 라우팅 시 노출할 액션/파라미터 가이드.
+                             미선언 시 None(지휘자는 일반 가이드로 대체).
+            default_timeout: 이 에이전트 작업의 기본 타임아웃(초). 미선언 시 None
+                             (지휘자는 전역 기본값 사용).
+            routing:         라우팅 메타데이터(예: {"role": "communication",
+                             "platforms": [...]}). 미선언 시 {}.
+        """
         from .admin_router import LLM_ENV_VARS, PERMISSION_PRESETS
 
         preset = PERMISSION_PRESETS.get(permission_preset, PERMISSION_PRESETS["standard"])
@@ -85,6 +100,9 @@ class HealthMonitor:
             "nlu_description": nlu_description,
             "permission_preset": permission_preset,
             "allow_llm_access": effective_llm_access,
+            "params_schema": params_schema,
+            "default_timeout": default_timeout,
+            "routing": routing or {},
             "llm_env_vars": LLM_ENV_VARS,
             "registered_at": datetime.now(timezone.utc).isoformat(),
         }, ensure_ascii=False))

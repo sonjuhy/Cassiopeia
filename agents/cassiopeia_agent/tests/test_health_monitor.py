@@ -210,6 +210,28 @@ class TestRegisterAgent:
         data = json.loads(await health_monitor._redis.hget("agents:registry", "a1"))
         assert data["allow_llm_access"] is True
 
+    async def test_persists_self_describing_metadata(self, health_monitor):
+        """에이전트가 선언한 params_schema/default_timeout/routing 이 레지스트리에 저장되어야 한다."""
+        await health_monitor.register_agent(
+            "weather_agent",
+            ["get_weather"],
+            params_schema={"action": "get_weather", "params": {"city": "도시명"}},
+            default_timeout=90,
+            routing={"role": "communication", "platforms": ["slack", "discord"]},
+        )
+        data = json.loads(await health_monitor._redis.hget("agents:registry", "weather_agent"))
+        assert data["params_schema"] == {"action": "get_weather", "params": {"city": "도시명"}}
+        assert data["default_timeout"] == 90
+        assert data["routing"] == {"role": "communication", "platforms": ["slack", "discord"]}
+
+    async def test_metadata_defaults_when_not_declared(self, health_monitor):
+        """선언하지 않으면 안전한 기본값(None/{} )으로 저장되어야 한다."""
+        await health_monitor.register_agent("plain_agent", [])
+        data = json.loads(await health_monitor._redis.hget("agents:registry", "plain_agent"))
+        assert data["params_schema"] is None
+        assert data["default_timeout"] is None
+        assert data["routing"] == {}
+
 
 # ── get_available_agents ──────────────────────────────────────────────────────
 

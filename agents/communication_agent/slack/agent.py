@@ -266,6 +266,8 @@ class SlackCommAgent:
                     )
                     
                     # 2. 중앙 레지스트리에 능력치 등록 (동적 라우팅용)
+                    #    routing 으로 자신이 커뮤니케이션 역할(slack 플랫폼)임을 선언한다.
+                    #    지휘자는 이 메타데이터만으로 사용자 응답 수신자를 결정한다.
                     await self._redis.update_agent_registry(
                         self.agent_name,
                         {
@@ -273,6 +275,7 @@ class SlackCommAgent:
                             "lifecycle_type": "long_running",
                             "nlu_description": nlu_desc,
                             "capabilities": ["message", "communication"],
+                            "routing": {"role": "communication", "platforms": ["slack"]},
                             "registered_at": datetime.now(timezone.utc).isoformat(),
                         }
                     )
