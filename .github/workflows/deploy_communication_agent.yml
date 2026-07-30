@@ -1,12 +1,12 @@
-name: Deploy cassiopeia_agent
+name: Deploy communication_agent
 
 on:
   push:
     branches: [main]
     paths:
-      - 'agents/cassiopeia_agent/**'
+      - 'agents/communication_agent/**'
       - 'shared_core/**'
-      - '.github/workflows/deploy_cassiopeia_agent.yml'
+      - '.github/workflows/deploy_communication_agent.yml'
 
 jobs:
   # ── 테스트 ──────────────────────────────────────────────────────────────────
@@ -14,8 +14,8 @@ jobs:
     uses: ./.github/workflows/test.yml
 
   # ── 배포 (테스트 통과 후) ────────────────────────────────────────────────────
-  # 이미지는 GHCR을 거치지 않고, 서버에서 git pull 후 docker-compose.yml 정의대로
-  # 소스에서 직접 빌드합니다 (다른 에이전트들의 start_*.sh 스크립트와 동일한 방식).
+  # 이미지는 GHCR을 거치지 않고, 서버에서 git pull 후 기존 start_comm.sh 스크립트로
+  # 소스에서 직접 빌드·재시작합니다 (docker-compose 밖에서 관리되는 리스너 컨테이너).
   deploy:
     needs: test
     runs-on: ubuntu-latest
@@ -41,6 +41,4 @@ jobs:
           script: |
             cd ~/Workspace/CassiopeiaProject/Cassiopeia
             git pull origin main
-            docker compose build cassiopeia_agent
-            docker compose up -d cassiopeia_agent
-            docker image prune -f
+            bash start_comm.sh
